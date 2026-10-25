@@ -1,0 +1,17 @@
+
+{
+  "name": "chilly-discord-bot",
+  "version": "1.0.0",
+  "description": "Chilly - All-in-One Discord Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "better-sqlite3": "^11.10.0"
+  }
+}
