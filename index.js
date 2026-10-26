@@ -1,19 +1,35 @@
-// Chilly .start / .stop fake-nuke effect
-// IMPORTANT: Paste this handler AFTER your existing `const client = new Client(...)`
-// and BEFORE `client.login(...)`. Do NOT create a second client.
+const {
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField
+} = require('discord.js');
 
-// Chilly .start / .stop
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
 const fakeNukeRuns = new Map();
+
+client.once('ready', () => {
+  console.log(`Chilly is online as ${client.user.tag}`);
+});
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
 
   const command = message.content.trim().toLowerCase();
-  if (!['.start', '.stop'].includes(command)) return;
+
+  if (command !== '.start' && command !== '.stop') return;
 
   const allowed =
     message.author.id === message.guild.ownerId ||
-    message.member?.permissions.has('ManageGuild');
+    message.member?.permissions.has(
+      PermissionsBitField.Flags.ManageGuild
+    );
 
   if (!allowed) {
     return message.reply(
@@ -23,12 +39,17 @@ client.on('messageCreate', async (message) => {
 
   if (command === '.stop') {
     const run = fakeNukeRuns.get(message.guild.id);
-    if (run) run.cancelled = true;
-    return message.reply('🛑 Sequence stopped.');
+
+    if (!run) {
+      return message.reply('ℹ️ No simulation is running.');
+    }
+
+    run.cancelled = true;
+    return message.reply('🛑 Simulation stopped.');
   }
 
   if (fakeNukeRuns.has(message.guild.id)) {
-    return message.reply('⚠️ A sequence is already running.');
+    return message.reply('⚠️ A simulation is already running.');
   }
 
   const run = { cancelled: false };
@@ -59,9 +80,10 @@ client.on('messageCreate', async (message) => {
       await new Promise(resolve => setTimeout(resolve, 1200));
     }
   } catch (error) {
-    console.error('Sequence error:', error);
-    await message.channel.send('❌ Sequence failed.').catch(() => {});
+    console.error('Simulation error:', error);
   } finally {
     fakeNukeRuns.delete(message.guild.id);
   }
 });
+
+client.login(process.env.DISCORD_TOKEN);
