@@ -12,10 +12,8 @@ if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const db = new Database('chilly.sqlite');
-
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
  guild TEXT, user TEXT, coins INTEGER DEFAULT 0,
@@ -39,10 +37,40 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 `);
 
+// Migration for older SQLite databases. Keep existing rows; add columns only when missing.
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some(col => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('users', 'guild', 'TEXT');
+ensureColumn('users', 'user', 'TEXT');
+ensureColumn('users', 'coins', 'INTEGER DEFAULT 0');
+ensureColumn('users', 'daily', 'INTEGER DEFAULT 0');
+ensureColumn('users', 'worked', 'INTEGER DEFAULT 0');
+ensureColumn('warnings', 'guild', 'TEXT');
+ensureColumn('warnings', 'user', 'TEXT');
+ensureColumn('warnings', 'moderator', 'TEXT');
+ensureColumn('warnings', 'reason', 'TEXT');
+ensureColumn('warnings', 'created', 'INTEGER');
+ensureColumn('inventory', 'guild', 'TEXT');
+ensureColumn('inventory', 'user', 'TEXT');
+ensureColumn('inventory', 'item', 'TEXT');
+ensureColumn('inventory', 'quantity', 'INTEGER DEFAULT 0');
+ensureColumn('giveaways', 'guild', 'TEXT');
+ensureColumn('giveaways', 'channel', 'TEXT');
+ensureColumn('giveaways', 'message', 'TEXT');
+ensureColumn('giveaways', 'prize', 'TEXT');
+ensureColumn('giveaways', 'winners', 'INTEGER');
+ensureColumn('giveaways', 'ends', 'INTEGER');
+ensureColumn('giveaways', 'ended', 'INTEGER DEFAULT 0');
+ensureColumn('entries', 'giveaway', 'TEXT');
+ensureColumn('entries', 'user', 'TEXT');
+
 const commands = [
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
-
  new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
@@ -61,7 +89,6 @@ const commands = [
    )),
  new SlashCommandBuilder().setName('inventory').setDescription('View inventory')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
-
  new SlashCommandBuilder().setName('warn').setDescription('Warn a member')
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
@@ -91,7 +118,6 @@ const commands = [
  new SlashCommandBuilder().setName('unban').setDescription('Unban by user ID')
   .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
   .addStringOption(o=>o.setName('userid').setDescription('User ID').setRequired(true)),
-
  new SlashCommandBuilder().setName('8ball').setDescription('Ask the magic 8-ball')
   .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
  new SlashCommandBuilder().setName('coinflip').setDescription('Flip a coin'),
@@ -103,7 +129,6 @@ const commands = [
  new SlashCommandBuilder().setName('ship').setDescription('Compatibility score')
   .addUserOption(o=>o.setName('user1').setDescription('First member').setRequired(true))
   .addUserOption(o=>o.setName('user2').setDescription('Second member').setRequired(true)),
-
  new SlashCommandBuilder().setName('avatar').setDescription('Show avatar')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('userinfo').setDescription('Show user information')
@@ -119,7 +144,6 @@ const commands = [
  new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
   .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
-
  new SlashCommandBuilder().setName('giveaway').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
@@ -134,6 +158,9 @@ const commands = [
 ].map(c=>c.toJSON());
 
 function account(g,u) {
+ // If an older database had no guild column, attach that user's legacy row
+ // to the server they first use the economy in, preserving their coin values.
+ db.prepare('UPDATE users SET guild=? WHERE user=? AND guild IS NULL').run(g,u);
  db.prepare('INSERT OR IGNORE INTO users(guild,user) VALUES(?,?)').run(g,u);
  return db.prepare('SELECT * FROM users WHERE guild=? AND user=?').get(g,u);
 }
@@ -143,7 +170,6 @@ function choose(a,n) {
  while(x.length&&r.length<n) r.push(x.splice(Math.floor(Math.random()*x.length),1)[0]);
  return r;
 }
-
 async function endGiveaway(id, reroll=false) {
  const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
  if(!g) return {error:'Giveaway not found.'};
@@ -167,7 +193,6 @@ async function endGiveaway(id, reroll=false) {
  }
  return {winners};
 }
-
 client.once('ready', async()=>{
  console.log('Chilly online as '+client.user.tag);
  client.user.setPresence({
@@ -179,12 +204,10 @@ client.once('ready', async()=>{
    .put(Routes.applicationCommands(CLIENT_ID),{body:commands});
   console.log('Registered '+commands.length+' slash commands.');
  } catch(e) { console.error('Command registration failed:',e); }
-
  for(const g of db.prepare('SELECT id,ends FROM giveaways WHERE ended=0').all()) {
   setTimeout(()=>endGiveaway(g.id).catch(console.error),Math.max(0,g.ends*1000-Date.now()));
  }
 });
-
 client.on('interactionCreate', async i=>{
  try {
   if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
@@ -195,16 +218,13 @@ client.on('interactionCreate', async i=>{
    return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
   if(!i.isChatInputCommand()) return;
-
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
-
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
    .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll')
    .setFooter({text:'Playing Powered by Spidyyy'})]});
-
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
@@ -247,7 +267,6 @@ client.on('interactionCreate', async i=>{
    const who=target||u, rows=db.prepare('SELECT item,quantity FROM inventory WHERE guild=? AND user=?').all(g.id,who.id);
    return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
   }
-
   if(c==='warn') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason');
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
@@ -284,7 +303,6 @@ client.on('interactionCreate', async i=>{
    await g.members.unban(i.options.getString('userid'));
    return i.reply('✅ User unbanned.');
   }
-
   if(c==='8ball') return i.reply('🎱 '+choose(['Definitely!','Yes!','Ask again later.','Probably not.','No way!'],1)[0]);
   if(c==='coinflip') return i.reply('🪙 '+(Math.random()<0.5?'Heads':'Tails')+'!');
   if(c==='dice') return i.reply('🎲 You rolled '+(1+Math.floor(Math.random()*6))+'!');
@@ -298,7 +316,6 @@ client.on('interactionCreate', async i=>{
    const a=i.options.getUser('user1'), b=i.options.getUser('user2');
    return i.reply('💞 '+a.username+' + '+b.username+': **'+Math.floor(Math.random()*101)+'%** compatibility!');
   }
-
   if(c==='avatar') {
    const who=target||u;
    return i.reply({embeds:[new EmbedBuilder().setTitle(who.username+"'s Avatar").setImage(who.displayAvatarURL({size:1024}))]});
@@ -328,7 +345,6 @@ client.on('interactionCreate', async i=>{
    setTimeout(()=>i.followUp({content:'⏰ <@'+u.id+'> Reminder: '+msg,allowedMentions:{users:[u.id]}}).catch(()=>{}),seconds*1000);
    return;
   }
-
   if(c==='giveaway') {
    const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
@@ -357,5 +373,4 @@ client.on('interactionCreate', async i=>{
   else await i.reply(p).catch(()=>{});
  }
 });
-
 client.login(TOKEN);
