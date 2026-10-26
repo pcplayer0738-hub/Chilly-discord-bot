@@ -1,4 +1,3 @@
-
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
@@ -343,4 +342,20 @@ client.on('interactionCreate', async i=>{
    return;
   }
   if(c==='giveaway-end') {
-   const r=await end
+   const r=await endGiveaway(i.options.getString('id'));
+   return i.reply(r.error?{content:r.error,ephemeral:true}:{content:'Giveaway ended.'});
+  }
+  if(c==='reroll') {
+   const r=await endGiveaway(i.options.getString('id'),true);
+   if(r.error) return i.reply({content:r.error,ephemeral:true});
+   return i.reply(r.winners.length?'🎉 New winner(s): '+r.winners.map(x=>'<@'+x+'>').join(', '):'No entries to reroll.');
+  }
+ } catch(e) {
+  console.error('Command error:',e);
+  const p={content:'Command failed. Check bot permissions and hosting logs.',ephemeral:true};
+  if(i.deferred||i.replied) await i.followUp(p).catch(()=>{});
+  else await i.reply(p).catch(()=>{});
+ }
+});
+
+client.login(TOKEN);
