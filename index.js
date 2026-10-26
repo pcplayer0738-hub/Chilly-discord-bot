@@ -1,7 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType, UserSelectMenuBuilder, StringSelectMenuBuilder
+  ButtonStyle, ActivityType
 } = require('discord.js');
 const Database = require('better-sqlite3');
 
@@ -36,19 +36,17 @@ CREATE TABLE IF NOT EXISTS entries (
  giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
 );
 CREATE TABLE IF NOT EXISTS guild_settings (
- guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0, extraowners TEXT DEFAULT '[]'
+ guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0
 );
 `);
 
-// Migration for older SQLite databases.
+// Migration for older SQLite databases. Keep existing rows; add columns only when missing.
 function ensureColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some(col => col.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  if (!columns.some(col => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
-ensureColumn('guild_settings','extraowners',"TEXT DEFAULT '[]'");
-
-/* legacy migration helper kept below */
-// Migration for older SQLite databases. Keep existing rows; add columns only when missing.
 ensureColumn('users', 'guild', 'TEXT');
 ensureColumn('users', 'user', 'TEXT');
 ensureColumn('users', 'coins', 'INTEGER DEFAULT 0');
@@ -169,7 +167,12 @@ const commands = [
  new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation and server log channel')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
- new SlashCommandBuilder().setName('security').setDescription('Open Chilly security dashboard').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+ new SlashCommandBuilder().setName('security').setDescription('Enable or disable Chilly security protections')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('feature').setDescription('Protection feature').setRequired(true).addChoices(
+   {name:'Anti-nuke alerts',value:'antinuke'},{name:'Anti-raid alerts',value:'antiraid'},
+   {name:'Anti-link',value:'antilink'},{name:'Anti-spam',value:'antispam'},{name:'Anti-abuse',value:'antiabuse'}))
+  .addBooleanOption(o=>o.setName('enabled').setDescription('Enable or disable').setRequired(true))
 ].map(c=>c.toJSON());
 
 function account(g,u) {
@@ -245,28 +248,6 @@ client.once('ready', async()=>{
 });
 client.on('interactionCreate', async i=>{
  try {
-  if(i.isButton() && i.customId.startsWith('chilly_security:')) {
-   if(!i.guild || !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission.',ephemeral:true});
-   const feature=i.customId.split(':')[1];
-   if(feature==='extraowner') {
-    const menu=new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('chilly_security_extraowner').setPlaceholder('Select an extraowner').setMinValues(1).setMaxValues(1));
-    return i.reply({content:'Select a member to add as an extraowner. This is a trusted-user list only; it does not grant Discord permissions.',components:[menu],ephemeral:true});
-   }
-   const allowed=['antinuke','antiraid','antilink','antispam','antiabuse'];
-   if(!allowed.includes(feature)) return i.reply({content:'Unknown security feature.',ephemeral:true});
-   const cfg=settings(i.guild.id), next=cfg[feature]?0:1;
-   db.prepare('UPDATE guild_settings SET '+feature+'=? WHERE guild=?').run(next,i.guild.id);
-   const names={antinuke:'Anti-nuke alerts',antiraid:'Anti-raid alerts',antilink:'Anti-link',antispam:'Anti-spam',antiabuse:'Anti-abuse'};
-   return i.reply({content:(next?'✅ Enabled ':'🛑 Disabled ')+names[feature]+'. Run /security to refresh the dashboard.'+(feature==='antinuke'||feature==='antiraid'?' Alerts only; not automatic prevention.':''),ephemeral:true});
-  }
-  if(i.isUserSelectMenu() && i.customId==='chilly_security_extraowner') {
-   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission.',ephemeral:true});
-   const cfg=settings(i.guild.id); let ids=[]; try{ids=JSON.parse(cfg.extraowners||'[]')}catch{}
-   const id=i.values[0]; if(id===i.guild.ownerId) return i.reply({content:'The server owner is already trusted.',ephemeral:true});
-   if(!ids.includes(id)) ids.push(id);
-   db.prepare('UPDATE guild_settings SET extraowners=? WHERE guild=?').run(JSON.stringify(ids),i.guild.id);
-   return i.reply({content:'✅ Added <@'+id+'> to the extraowner list. This does not grant Discord permissions.',ephemeral:true});
-  }
   if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
    const id=i.customId.split(':')[1];
    const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
@@ -277,8 +258,6 @@ client.on('interactionCreate', async i=>{
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
-  // Acknowledge setup commands immediately to prevent Discord's 'application did not respond'.
-  if(c==='security' || c==='setlogs') await i.deferReply({ephemeral:true});
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
   if(c==='say') {
    const channel=i.options.getChannel('channel');
@@ -302,27 +281,6 @@ client.on('interactionCreate', async i=>{
   if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
    .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll\n**Security & Logs:** /setlogs /security')
    .setFooter({text:'Playing Powered by Spidyyy'})]});
-  if(c==='setlogs') {
-   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.editReply({content:'You need Manage Server permission.'});
-   const channel=i.options.getChannel('channel');
-   if(!channel || !channel.isTextBased()) return i.editReply({content:'Choose a text channel.'});
-   db.prepare('INSERT OR IGNORE INTO guild_settings(guild) VALUES(?)').run(g.id);
-   db.prepare('UPDATE guild_settings SET log_channel=? WHERE guild=?').run(channel.id,g.id);
-   return i.editReply({content:'✅ Logs channel set to '+channel+'.'});
-  }
-  if(c==='security') {
-   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.editReply({content:'You need Manage Server permission.'});
-   const cfg=settings(g.id);
-   const enabled=cfg.antinuke ? 'Enabled' : 'Disabled';
-   const extra=(()=>{try{return JSON.parse(cfg.extraowners||'[]')}catch{return []}})();
-   const embed=new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Configure Security')
-    .setDescription('Enhance your server security with Chilly. Use the buttons below to configure protections.')
-    .addFields({name:'Anti-nuke alerts',value:enabled,inline:true},{name:'Anti-raid alerts',value:cfg.antiraid?'Enabled':'Disabled',inline:true},{name:'Anti-link',value:cfg.antilink?'Enabled':'Disabled',inline:true},{name:'Anti-spam',value:cfg.antispam?'Enabled':'Disabled',inline:true},{name:'Anti-abuse',value:cfg.antiabuse?'Enabled':'Disabled',inline:true},{name:'Extraowners',value:extra.length?extra.map(id=>'<@'+id+'>').join(', '):'None'})
-    .setFooter({text:'Anti-nuke/anti-raid are alert-only; they do not automatically stop attacks.'});
-   const row1=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_security:antinuke').setLabel('Anti-nuke').setStyle(cfg.antinuke?ButtonStyle.Success:ButtonStyle.Secondary),new ButtonBuilder().setCustomId('chilly_security:antiraid').setLabel('Anti-raid').setStyle(cfg.antiraid?ButtonStyle.Success:ButtonStyle.Secondary),new ButtonBuilder().setCustomId('chilly_security:antilink').setLabel('Anti-link').setStyle(cfg.antilink?ButtonStyle.Success:ButtonStyle.Secondary));
-   const row2=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_security:antispam').setLabel('Anti-spam').setStyle(cfg.antispam?ButtonStyle.Success:ButtonStyle.Secondary),new ButtonBuilder().setCustomId('chilly_security:antiabuse').setLabel('Anti-abuse').setStyle(cfg.antiabuse?ButtonStyle.Success:ButtonStyle.Secondary),new ButtonBuilder().setCustomId('chilly_security:extraowner').setLabel('Extraowner').setStyle(ButtonStyle.Primary));
-   return i.editReply({embeds:[embed],components:[row1,row2]});
-  }
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
@@ -366,11 +324,9 @@ client.on('interactionCreate', async i=>{
    return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
   }
   if(c==='warn') {
-   const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
-   const dm=await to.send({embeds:[auditEmbed('⚠️ You Have Been Warned',0xF1C40F,[{name:'Server',value:g.name},{name:'Moderator',value:u.tag},{name:'Reason',value:reason}])]}).then(()=>true).catch(()=>false);
+   const to=i.options.getUser('user'), reason=i.options.getString('reason');
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
-   const e=auditEmbed('⚠️ User Has Been Warned',0xF1C40F,[{name:'👤 User',value:`${to.tag} (${to.id})`},{name:'☑️ Moderator',value:`${u.tag} (${u.id})`},{name:'📩 DM Done?',value:dm?'✅ Yes':'❌ No (DMs closed)'},{name:'📋 Reason',value:reason}]).setThumbnail(to.displayAvatarURL({size:256}));
-   await logAction(g,e); return i.reply({embeds:[e]});
+   return i.reply('⚠️ Warned <@'+to.id+'>. Reason: '+reason);
   }
   if(c==='warnings') {
    const to=i.options.getUser('user');
@@ -380,39 +336,28 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='clear') {
    const n=i.options.getInteger('amount'), deleted=await i.channel.bulkDelete(n,true);
-   const e=auditEmbed('🧹 Messages Cleared',0x3498DB,[{name:'Moderator',value:`${u.tag} (${u.id})`},{name:'Channel',value:`${i.channel}`},{name:'Deleted',value:String(deleted.size)}]); await logAction(g,e); return i.reply({embeds:[e],ephemeral:true});
+   return i.reply({content:'🧹 Deleted '+deleted.size+' messages.',ephemeral:true});
   }
   if(c==='timeout'||c==='untimeout') {
    const to=i.options.getUser('user'), m=await g.members.fetch(to.id);
    if(c==='timeout') {
     const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
-    const dm=await to.send({embeds:[auditEmbed('🔇 You Have Been Timed Out',0xE67E22,[{name:'Server',value:g.name},{name:'Duration',value:mins+' minutes'},{name:'Moderator',value:u.tag},{name:'Reason',value:reason}])]}).then(()=>true).catch(()=>false);
     await m.timeout(mins*60000,reason);
-    const e=auditEmbed('🔇 User Has Been Muted',0xE67E22,[{name:'👤 User',value:`${to.tag} (${to.id})`},{name:'☑️ Moderator',value:`${u.tag} (${u.id})`},{name:'⏱️ Duration',value:mins+' minutes'},{name:'📩 DM Done?',value:dm?'✅ Yes':'❌ No (DMs closed)'},{name:'📋 Reason',value:reason}]).setThumbnail(to.displayAvatarURL({size:256}));
-    await logAction(g,e); return i.reply({embeds:[e]});
+    return i.reply('🔇 Timed out <@'+to.id+'> for '+mins+' minutes.');
    }
-   const dm=await to.send({embeds:[auditEmbed('🔊 Your Timeout Has Been Removed',0x2ECC71,[{name:'Server',value:g.name},{name:'Moderator',value:u.tag},{name:'Reason',value:'Timeout removed'}])]}).then(()=>true).catch(()=>false);
    await m.timeout(null);
-   const e=auditEmbed('🔊 User Has Been Unmuted',0x2ECC71,[{name:'👤 User',value:`${to.tag} (${to.id})`},{name:'☑️ Moderator',value:`${u.tag} (${u.id})`},{name:'📩 DM Done?',value:dm?'✅ Yes':'❌ No (DMs closed)'},{name:'📋 Reason',value:'Timeout removed'}]).setThumbnail(to.displayAvatarURL({size:256}));
-   await logAction(g,e); return i.reply({embeds:[e]});
+   return i.reply('🔊 Timeout removed for <@'+to.id+'>.');
   }
   if(c==='kick'||c==='ban') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
    const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
-   const dm=await to.send({embeds:[auditEmbed(c==='kick'?'👢 You Have Been Kicked':'🔨 You Have Been Banned',c==='kick'?0xE67E22:0xE74C3C,[{name:'Server',value:g.name},{name:'Moderator',value:u.tag},{name:'Reason',value:reason}])]}).then(()=>true).catch(()=>false);
    if(c==='kick') await m.kick(reason); else await m.ban({reason});
-   const e=auditEmbed(c==='kick'?'👢 User Has Been Kicked':'🔨 User Has Been Banned',c==='kick'?0xE67E22:0xE74C3C,[{name:'👤 User',value:`${to.tag} (${to.id})`},{name:'☑️ Moderator',value:`${u.tag} (${u.id})`},{name:'📩 DM Done?',value:dm?'✅ Yes':'❌ No (DMs closed)'},{name:'📋 Reason',value:reason}]).setThumbnail(to.displayAvatarURL({size:256}));
-   await logAction(g,e); return i.reply({embeds:[e]});
+   return i.reply((c==='kick'?'👢 Kicked ':'🔨 Banned ')+'<@'+to.id+'>. Reason: '+reason);
   }
   if(c==='unban') {
-   const id=i.options.getString('userid');
-   let targetUser=await client.users.fetch(id).catch(()=>null);
-   const dm=targetUser?await targetUser.send({embeds:[auditEmbed('✅ Your Ban Has Been Removed',0x2ECC71,[{name:'Server',value:g.name},{name:'Moderator',value:u.tag}])]}).then(()=>true).catch(()=>false):false;
-   await g.members.unban(id);
-   const e=auditEmbed('✅ User Has Been Unbanned',0x2ECC71,[{name:'👤 User ID',value:id},{name:'☑️ Moderator',value:`${u.tag} (${u.id})`},{name:'📩 DM Done?',value:dm?'✅ Yes':'❌ No (user unavailable or DMs closed)'}]);
-   if(targetUser) e.setThumbnail(targetUser.displayAvatarURL({size:256}));
-   await logAction(g,e); return i.reply({embeds:[e]});
+   await g.members.unban(i.options.getString('userid'));
+   return i.reply('✅ User unbanned.');
   }
   if(c==='8ball') return i.reply('🎱 '+choose(['Definitely!','Yes!','Ask again later.','Probably not.','No way!'],1)[0]);
   if(c==='coinflip') return i.reply('🪙 '+(Math.random()<0.5?'Heads':'Tails')+'!');
@@ -480,8 +425,7 @@ client.on('interactionCreate', async i=>{
  } catch(e) {
   console.error('Command error:',e);
   const p={content:'Command failed. Check bot permissions and hosting logs.',ephemeral:true};
-  if(i.deferred) await i.editReply({content:p.content}).catch(()=>{});
-  else if(i.replied) await i.followUp(p).catch(()=>{});
+  if(i.deferred||i.replied) await i.followUp(p).catch(()=>{});
   else await i.reply(p).catch(()=>{});
  }
 });
