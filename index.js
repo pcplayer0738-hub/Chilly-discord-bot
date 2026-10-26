@@ -1,971 +1,400 @@
-
 const {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  ChannelType,
-  EmbedBuilder
+  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
+  PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
+  ButtonStyle, ActivityType
 } = require('discord.js');
-
 const Database = require('better-sqlite3');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 if (!TOKEN || !CLIENT_ID) {
-  console.error('Missing DISCORD_TOKEN or CLIENT_ID in environment variables.');
+  console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
-
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const db = new Database('chilly.sqlite');
-
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
-  user_id TEXT PRIMARY KEY,
-  guild_id TEXT NOT NULL,
-  wallet INTEGER NOT NULL DEFAULT 0,
-  bank INTEGER NOT NULL DEFAULT 0,
-  last_daily INTEGER NOT NULL DEFAULT 0
+ guild TEXT, user TEXT, coins INTEGER DEFAULT 0,
+ daily INTEGER DEFAULT 0, worked INTEGER DEFAULT 0,
+ PRIMARY KEY(guild,user)
 );
-
 CREATE TABLE IF NOT EXISTS warnings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  guild_id TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  moderator_id TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ guild TEXT, user TEXT, moderator TEXT, reason TEXT, created INTEGER
 );
-
 CREATE TABLE IF NOT EXISTS inventory (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  guild_id TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  item TEXT NOT NULL
+ guild TEXT, user TEXT, item TEXT, quantity INTEGER DEFAULT 0,
+ PRIMARY KEY(guild,user,item)
 );
-
 CREATE TABLE IF NOT EXISTS giveaways (
-  message_id TEXT PRIMARY KEY,
-  guild_id TEXT NOT NULL,
-  channel_id TEXT NOT NULL,
-  prize TEXT NOT NULL,
-  ends_at INTEGER NOT NULL,
-  ended INTEGER NOT NULL DEFAULT 0
+ id TEXT PRIMARY KEY, guild TEXT, channel TEXT, message TEXT,
+ prize TEXT, winners INTEGER, ends INTEGER, ended INTEGER DEFAULT 0
 );
-
-CREATE TABLE IF NOT EXISTS giveaway_entries (
-  message_id TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  PRIMARY KEY (message_id, user_id)
+CREATE TABLE IF NOT EXISTS entries (
+ giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
 );
 `);
 
-function account(userId, guildId) {
-  db.prepare(`
-    INSERT OR IGNORE INTO users (user_id, guild_id)
-    VALUES (?, ?)
-  `).run(userId, guildId);
-
-  return db.prepare(`
-    SELECT * FROM users WHERE user_id = ? AND guild_id = ?
-  `).get(userId, guildId);
+// Migration for older SQLite databases. Keep existing rows; add columns only when missing.
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some(col => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
-
-function updateBalance(userId, guildId, wallet, bank) {
-  db.prepare(`
-    UPDATE users SET wallet = ?, bank = ?
-    WHERE user_id = ? AND guild_id = ?
-  `).run(wallet, bank, userId, guildId);
-}
-
-function isMod(interaction) {
-  return interaction.memberPermissions?.has(
-    PermissionFlagsBits.ModerateMembers
-  ) || interaction.memberPermissions?.has(
-    PermissionFlagsBits.Administrator
-  );
-}
+ensureColumn('users', 'guild', 'TEXT');
+ensureColumn('users', 'user', 'TEXT');
+ensureColumn('users', 'coins', 'INTEGER DEFAULT 0');
+ensureColumn('users', 'daily', 'INTEGER DEFAULT 0');
+ensureColumn('users', 'worked', 'INTEGER DEFAULT 0');
+ensureColumn('warnings', 'guild', 'TEXT');
+ensureColumn('warnings', 'user', 'TEXT');
+ensureColumn('warnings', 'moderator', 'TEXT');
+ensureColumn('warnings', 'reason', 'TEXT');
+ensureColumn('warnings', 'created', 'INTEGER');
+ensureColumn('inventory', 'guild', 'TEXT');
+ensureColumn('inventory', 'user', 'TEXT');
+ensureColumn('inventory', 'item', 'TEXT');
+ensureColumn('inventory', 'quantity', 'INTEGER DEFAULT 0');
+ensureColumn('giveaways', 'guild', 'TEXT');
+ensureColumn('giveaways', 'channel', 'TEXT');
+ensureColumn('giveaways', 'message', 'TEXT');
+ensureColumn('giveaways', 'prize', 'TEXT');
+ensureColumn('giveaways', 'winners', 'INTEGER');
+ensureColumn('giveaways', 'ends', 'INTEGER');
+ensureColumn('giveaways', 'ended', 'INTEGER DEFAULT 0');
+ensureColumn('entries', 'giveaway', 'TEXT');
+ensureColumn('entries', 'user', 'TEXT');
 
 const commands = [
-  new SlashCommandBuilder().setName('ping')
-    .setDescription('Check bot latency'),
+ new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
+ new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+ new SlashCommandBuilder().setName('say').setDescription('Send a message to a selected channel')
+  .addChannelOption(o=>o.setName('channel').setDescription('Channel to send the message in').addChannelTypes(ChannelType.GuildText).setRequired(true))
+  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true)),
+ new SlashCommandBuilder().setName('money').setDescription('Add coins to a member (server owner only)')
+  .addUserOption(o=>o.setName('user').setDescription('Member receiving coins').setRequired(true))
+  .addIntegerOption(o=>o.setName('amount').setDescription('Coins to add').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
+ new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
+  .addUserOption(o=>o.setName('user').setDescription('Member')),
+ new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
+ new SlashCommandBuilder().setName('work').setDescription('Earn coins by working'),
+ new SlashCommandBuilder().setName('give').setDescription('Give coins to a member')
+  .addUserOption(o=>o.setName('user').setDescription('Recipient').setRequired(true))
+  .addIntegerOption(o=>o.setName('amount').setDescription('Amount').setMinValue(1).setRequired(true)),
+ new SlashCommandBuilder().setName('leaderboard').setDescription('Richest members'),
+ new SlashCommandBuilder().setName('shop').setDescription('View the coin shop'),
+ new SlashCommandBuilder().setName('buy').setDescription('Buy an item')
+  .addStringOption(o=>o.setName('item').setDescription('Item').setRequired(true)
+   .addChoices(
+    {name:'Cookie - 100 coins',value:'Cookie'},
+    {name:'Coffee - 250 coins',value:'Coffee'},
+    {name:'Golden Crown - 1000 coins',value:'Golden Crown'}
+   )),
+ new SlashCommandBuilder().setName('inventory').setDescription('View inventory')
+  .addUserOption(o=>o.setName('user').setDescription('Member')),
+ new SlashCommandBuilder().setName('warn').setDescription('Warn a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(true)),
+ new SlashCommandBuilder().setName('warnings').setDescription('View member warnings')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+ new SlashCommandBuilder().setName('clear').setDescription('Delete recent messages')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+  .addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(true)),
+ new SlashCommandBuilder().setName('timeout').setDescription('Timeout a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
+  .addIntegerOption(o=>o.setName('minutes').setDescription('Minutes').setMinValue(1).setMaxValue(40320).setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason')),
+ new SlashCommandBuilder().setName('untimeout').setDescription('Remove timeout')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+ new SlashCommandBuilder().setName('kick').setDescription('Kick a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.KickMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason')),
+ new SlashCommandBuilder().setName('ban').setDescription('Ban a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason')),
+ new SlashCommandBuilder().setName('unban').setDescription('Unban by user ID')
+  .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
+  .addStringOption(o=>o.setName('userid').setDescription('User ID').setRequired(true)),
+ new SlashCommandBuilder().setName('8ball').setDescription('Ask the magic 8-ball')
+  .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
+ new SlashCommandBuilder().setName('coinflip').setDescription('Flip a coin'),
+ new SlashCommandBuilder().setName('dice').setDescription('Roll a dice'),
+ new SlashCommandBuilder().setName('rps').setDescription('Rock paper scissors')
+  .addStringOption(o=>o.setName('choice').setDescription('Choose').setRequired(true)
+   .addChoices({name:'Rock',value:'rock'},{name:'Paper',value:'paper'},{name:'Scissors',value:'scissors'})),
+ new SlashCommandBuilder().setName('joke').setDescription('Get a clean joke'),
+ new SlashCommandBuilder().setName('ship').setDescription('Compatibility score')
+  .addUserOption(o=>o.setName('user1').setDescription('First member').setRequired(true))
+  .addUserOption(o=>o.setName('user2').setDescription('Second member').setRequired(true)),
+ new SlashCommandBuilder().setName('avatar').setDescription('Show avatar')
+  .addUserOption(o=>o.setName('user').setDescription('Member')),
+ new SlashCommandBuilder().setName('userinfo').setDescription('Show user information')
+  .addUserOption(o=>o.setName('user').setDescription('Member')),
+ new SlashCommandBuilder().setName('serverinfo').setDescription('Show server information'),
+ new SlashCommandBuilder().setName('poll').setDescription('Create yes/no poll')
+  .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
+ new SlashCommandBuilder().setName('calculator').setDescription('Calculate two numbers')
+  .addNumberOption(o=>o.setName('a').setDescription('First number').setRequired(true))
+  .addStringOption(o=>o.setName('operator').setDescription('Operation').setRequired(true)
+   .addChoices({name:'Add',value:'+'},{name:'Subtract',value:'-'},{name:'Multiply',value:'*'},{name:'Divide',value:'/'}))
+  .addNumberOption(o=>o.setName('b').setDescription('Second number').setRequired(true)),
+ new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
+  .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
+  .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
+ new SlashCommandBuilder().setName('giveaway').setDescription('Start a giveaway')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
+  .addIntegerOption(o=>o.setName('minutes').setDescription('Duration').setMinValue(1).setMaxValue(10080).setRequired(true))
+  .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true)),
+ new SlashCommandBuilder().setName('giveaway-end').setDescription('End giveaway early')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+ new SlashCommandBuilder().setName('reroll').setDescription('Pick new winners')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true))
+].map(c=>c.toJSON());
 
-  new SlashCommandBuilder().setName('help')
-    .setDescription('Show Chilly commands'),
-
-  new SlashCommandBuilder().setName('say')
-    .setDescription('Send a message to a channel')
-    .addChannelOption(o => o.setName('channel')
-      .setDescription('Target text channel')
-      .addChannelTypes(ChannelType.GuildText).setRequired(true))
-    .addStringOption(o => o.setName('message')
-      .setDescription('Message to send').setRequired(true)),
-
-  new SlashCommandBuilder().setName('money')
-    .setDescription('Owner-only: manage server economy')
-    .addSubcommand(s => s.setName('add')
-      .setDescription('Add coins to a member')
-      .addUserOption(o => o.setName('user')
-        .setDescription('Member').setRequired(true))
-      .addIntegerOption(o => o.setName('amount')
-        .setDescription('Amount').setMinValue(1).setRequired(true)))
-    .addSubcommand(s => s.setName('remove')
-      .setDescription('Remove coins from a member')
-      .addUserOption(o => o.setName('user')
-        .setDescription('Member').setRequired(true))
-      .addIntegerOption(o => o.setName('amount')
-        .setDescription('Amount').setMinValue(1).setRequired(true))),
-
-  new SlashCommandBuilder().setName('balance')
-    .setDescription('Check your balance')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member to check')),
-
-  new SlashCommandBuilder().setName('daily')
-    .setDescription('Claim daily coins'),
-
-  new SlashCommandBuilder().setName('work')
-    .setDescription('Work to earn coins'),
-
-  new SlashCommandBuilder().setName('give')
-    .setDescription('Give coins to a member')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Recipient').setRequired(true))
-    .addIntegerOption(o => o.setName('amount')
-      .setDescription('Amount').setMinValue(1).setRequired(true)),
-
-  new SlashCommandBuilder().setName('leaderboard')
-    .setDescription('Show the richest members'),
-
-  new SlashCommandBuilder().setName('shop')
-    .setDescription('View the item shop'),
-
-  new SlashCommandBuilder().setName('buy')
-    .setDescription('Buy a shop item')
-    .addStringOption(o => o.setName('item')
-      .setDescription('Item name')
-      .setRequired(true)
-      .addChoices(
-        { name: 'Bronze VIP', value: 'Bronze VIP' },
-        { name: 'Silver VIP', value: 'Silver VIP' },
-        { name: 'Gold VIP', value: 'Gold VIP' },
-        { name: 'Diamond VIP', value: 'Diamond VIP' }
-      )),
-
-  new SlashCommandBuilder().setName('inventory')
-    .setDescription('View your purchased items'),
-
-  new SlashCommandBuilder().setName('warn')
-    .setDescription('Warn a member')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true))
-    .addStringOption(o => o.setName('reason')
-      .setDescription('Reason').setRequired(true)),
-
-  new SlashCommandBuilder().setName('warnings')
-    .setDescription('View member warnings')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true)),
-
-  new SlashCommandBuilder().setName('clear')
-    .setDescription('Delete recent messages')
-    .addIntegerOption(o => o.setName('amount')
-      .setDescription('Number of messages (1–100)')
-      .setMinValue(1).setMaxValue(100).setRequired(true)),
-
-  new SlashCommandBuilder().setName('timeout')
-    .setDescription('Timeout a member')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true))
-    .addIntegerOption(o => o.setName('minutes')
-      .setDescription('Duration in minutes')
-      .setMinValue(1).setMaxValue(40320).setRequired(true))
-    .addStringOption(o => o.setName('reason')
-      .setDescription('Reason')),
-
-  new SlashCommandBuilder().setName('untimeout')
-    .setDescription('Remove member timeout')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true)),
-
-  new SlashCommandBuilder().setName('kick')
-    .setDescription('Kick a member')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true))
-    .addStringOption(o => o.setName('reason')
-      .setDescription('Reason')),
-
-  new SlashCommandBuilder().setName('ban')
-    .setDescription('Ban a member')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member').setRequired(true))
-    .addStringOption(o => o.setName('reason')
-      .setDescription('Reason')),
-
-  new SlashCommandBuilder().setName('unban')
-    .setDescription('Unban a member')
-    .addStringOption(o => o.setName('userid')
-      .setDescription('Discord user ID').setRequired(true)),
-
-  new SlashCommandBuilder().setName('8ball')
-    .setDescription('Ask the magic 8-ball')
-    .addStringOption(o => o.setName('question')
-      .setDescription('Your question').setRequired(true)),
-
-  new SlashCommandBuilder().setName('coinflip')
-    .setDescription('Flip a coin'),
-
-  new SlashCommandBuilder().setName('dice')
-    .setDescription('Roll a six-sided die'),
-
-  new SlashCommandBuilder().setName('rps')
-    .setDescription('Play rock paper scissors')
-    .addStringOption(o => o.setName('choice')
-      .setDescription('Your move').setRequired(true)
-      .addChoices(
-        { name: 'Rock', value: 'rock' },
-        { name: 'Paper', value: 'paper' },
-        { name: 'Scissors', value: 'scissors' }
-      )),
-
-  new SlashCommandBuilder().setName('joke')
-    .setDescription('Get a joke'),
-
-  new SlashCommandBuilder().setName('ship')
-    .setDescription('Calculate a fun compatibility score')
-    .addUserOption(o => o.setName('user1')
-      .setDescription('First member').setRequired(true))
-    .addUserOption(o => o.setName('user2')
-      .setDescription('Second member').setRequired(true)),
-
-  new SlashCommandBuilder().setName('avatar')
-    .setDescription('Show a member avatar')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member')),
-
-  new SlashCommandBuilder().setName('userinfo')
-    .setDescription('Show member information')
-    .addUserOption(o => o.setName('user')
-      .setDescription('Member')),
-
-  new SlashCommandBuilder().setName('serverinfo')
-    .setDescription('Show server information'),
-
-  new SlashCommandBuilder().setName('poll')
-    .setDescription('Create a poll')
-    .addStringOption(o => o.setName('question')
-      .setDescription('Poll question').setRequired(true)),
-
-  new SlashCommandBuilder().setName('calculator')
-    .setDescription('Calculate two numbers')
-    .addNumberOption(o => o.setName('a')
-      .setDescription('First number').setRequired(true))
-    .addStringOption(o => o.setName('operation')
-      .setDescription('Operation').setRequired(true)
-      .addChoices(
-        { name: 'Add', value: 'add' },
-        { name: 'Subtract', value: 'subtract' },
-        { name: 'Multiply', value: 'multiply' },
-        { name: 'Divide', value: 'divide' }
-      ))
-    .addNumberOption(o => o.setName('b')
-      .setDescription('Second number').setRequired(true)),
-
-  new SlashCommandBuilder().setName('remind')
-    .setDescription('Set a reminder in seconds')
-    .addIntegerOption(o => o.setName('seconds')
-      .setDescription('Seconds (5–3600)')
-      .setMinValue(5).setMaxValue(3600).setRequired(true))
-    .addStringOption(o => o.setName('message')
-      .setDescription('Reminder text').setRequired(true)),
-
-  new SlashCommandBuilder().setName('giveaway')
-    .setDescription('Create a giveaway')
-    .addIntegerOption(o => o.setName('minutes')
-      .setDescription('Duration in minutes')
-      .setMinValue(1).setMaxValue(10080).setRequired(true))
-    .addStringOption(o => o.setName('prize')
-      .setDescription('Prize').setRequired(true)),
-
-  new SlashCommandBuilder().setName('giveaway-end')
-    .setDescription('End a giveaway early')
-    .addStringOption(o => o.setName('messageid')
-      .setDescription('Giveaway message ID').setRequired(true)),
-
-  new SlashCommandBuilder().setName('reroll')
-    .setDescription('Pick a new giveaway winner')
-    .addStringOption(o => o.setName('messageid')
-      .setDescription('Giveaway message ID').setRequired(true))
-].map(c => c.toJSON());
-
-const shopItems = {
-  'Bronze VIP': 10000,
-  'Silver VIP': 25000,
-  'Gold VIP': 65000,
-  'Diamond VIP': 100000
-};
-
-async function finishGiveaway(messageId, channel, reroll = false) {
-  const giveaway = db.prepare(
-    'SELECT * FROM giveaways WHERE message_id = ?'
-  ).get(messageId);
-
-  if (!giveaway) {
-    throw new Error('Giveaway not found.');
-  }
-
-  const entries = db.prepare(
-    'SELECT user_id FROM giveaway_entries WHERE message_id = ?'
-  ).all(messageId);
-
-  if (!entries.length) {
-    if (!reroll) {
-      db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?')
-        .run(messageId);
-    }
-    await channel.send(`🎁 **${giveaway.prize}** — no entries.`);
-    return;
-  }
-
-  const winner = entries[Math.floor(Math.random() * entries.length)];
-
-  if (!reroll) {
-    db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?')
-      .run(messageId);
-  }
-
-  await channel.send(
-    `🎉 Congratulations <@${winner.user_id}>! You won **${giveaway.prize}**!`,
-    { allowedMentions: { users: [winner.user_id] } }
-  );
+function account(g,u) {
+ // If an older database had no guild column, attach that user's legacy row
+ // to the server they first use the economy in, preserving their coin values.
+ db.prepare('UPDATE users SET guild=? WHERE user=? AND guild IS NULL').run(g,u);
+ db.prepare('INSERT OR IGNORE INTO users(guild,user) VALUES(?,?)').run(g,u);
+ return db.prepare('SELECT * FROM users WHERE guild=? AND user=?').get(g,u);
 }
-
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-
-  client.user.setActivity('Powered by Spidyyy');
-
-  try {
-    const rest = new REST({ version: '10' }).setToken(TOKEN);
-    await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
-      { body: commands }
-    );
-    console.log('Slash commands registered.');
-  } catch (error) {
-    console.error('Command registration failed:', error);
+function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
+function choose(a,n) {
+ const x=[...a], r=[];
+ while(x.length&&r.length<n) r.push(x.splice(Math.floor(Math.random()*x.length),1)[0]);
+ return r;
+}
+async function endGiveaway(id, reroll=false) {
+ const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
+ if(!g) return {error:'Giveaway not found.'};
+ if(g.ended&&!reroll) return {error:'Giveaway already ended.'};
+ const entries=db.prepare('SELECT user FROM entries WHERE giveaway=?').all(id).map(x=>x.user);
+ const winners=choose(entries,g.winners);
+ if(!reroll) db.prepare('UPDATE giveaways SET ended=1 WHERE id=?').run(id);
+ if(!reroll) {
+  const ch=await client.channels.fetch(g.channel).catch(()=>null);
+  if(ch) {
+   if(g.message) {
+    const m=await ch.messages.fetch(g.message).catch(()=>null);
+    if(m) await m.edit({
+     embeds:[new EmbedBuilder().setTitle('🎉 Giveaway Ended')
+      .setDescription('Prize: '+g.prize+'\nWinners: '+(winners.map(x=>'<@'+x+'>').join(', ')||'No entries')+'\nID: '+id)],
+     components:[]
+    }).catch(()=>{});
+   }
+   await ch.send(winners.length?'🎉 Congratulations '+winners.map(x=>'<@'+x+'>').join(', ')+'! You won **'+g.prize+'**!':'Giveaway ended with no entries.').catch(()=>{});
   }
-
-  const active = db.prepare(
-    'SELECT * FROM giveaways WHERE ended = 0'
-  ).all();
-
-  for (const giveaway of active) {
-    const delay = giveaway.ends_at - Date.now();
-
-    if (delay <= 0) {
-      const channel = await client.channels.fetch(giveaway.channel_id)
-        .catch(() => null);
-      if (channel) {
-        await finishGiveaway(giveaway.message_id, channel).catch(console.error);
-      }
-    } else {
-      setTimeout(async () => {
-        const channel = await client.channels.fetch(giveaway.channel_id)
-          .catch(() => null);
-        if (channel) {
-          await finishGiveaway(giveaway.message_id, channel)
-            .catch(console.error);
-        }
-      }, Math.min(delay, 2147483647));
-    }
-  }
+ }
+ return {winners};
+}
+client.once('ready', async()=>{
+ console.log('Chilly online as '+client.user.tag);
+ client.user.setPresence({
+  activities:[{name:'Powered by Spidyyy',type:ActivityType.Playing}],
+  status:'online'
+ });
+ try {
+  await new REST({version:'10'}).setToken(TOKEN)
+   .put(Routes.applicationCommands(CLIENT_ID),{body:commands});
+  console.log('Registered '+commands.length+' slash commands.');
+ } catch(e) { console.error('Command registration failed:',e); }
+ for(const g of db.prepare('SELECT id,ends FROM giveaways WHERE ended=0').all()) {
+  setTimeout(()=>endGiveaway(g.id).catch(console.error),Math.max(0,g.ends*1000-Date.now()));
+ }
 });
-
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const name = interaction.commandName;
-  const guildId = interaction.guildId;
-  const userId = interaction.user.id;
-
-  try {
-    if (!guildId && name !== 'ping' && name !== 'help') {
-      return interaction.reply({
-        content: 'Use this command inside a server.',
-        ephemeral: true
-      });
-    }
-
-    if (name === 'ping') {
-      return interaction.reply(`🏓 Pong! ${client.ws.ping}ms`);
-    }
-
-    if (name === 'help') {
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('❄️ Chilly Commands')
-        .setDescription(
-          '**Moderation:** `/warn` `/warnings` `/clear` `/timeout` `/untimeout` `/kick` `/ban` `/unban`\n' +
-          '**Economy:** `/money` `/balance` `/daily` `/work` `/give` `/leaderboard` `/shop` `/buy` `/inventory`\n' +
-          '**Utility:** `/ping` `/say` `/avatar` `/userinfo` `/serverinfo` `/poll` `/calculator` `/remind`\n' +
-          '**Fun & Games:** `/8ball` `/coinflip` `/dice` `/rps` `/joke` `/ship`\n' +
-          '**Giveaways:** `/giveaway` `/giveaway-end` `/reroll`\n' +
-          '**Prefix:** `.start` `.stop`'
-        );
-
-      return interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    if (name === 'say') {
-      if (!interaction.memberPermissions.has(PermissionFlagsBits.ManageMessages)) {
-        return interaction.reply({ content: '❌ Manage Messages permission required.', ephemeral: true });
-      }
-
-      const channel = interaction.options.getChannel('channel');
-      const content = interaction.options.getString('message');
-
-      await channel.send({
-        content,
-        allowedMentions: { parse: [] }
-      });
-
-      return interaction.reply({ content: '✅ Message sent.', ephemeral: true });
-    }
-
-    if (name === 'money') {
-      if (interaction.user.id !== interaction.guild.ownerId) {
-        return interaction.reply({ content: '❌ Server owner only.', ephemeral: true });
-      }
-
-      const target = interaction.options.getUser('user');
-      const amount = interaction.options.getInteger('amount');
-      const sub = interaction.options.getSubcommand();
-      const acc = account(target.id, guildId);
-
-      if (sub === 'add') {
-        updateBalance(target.id, guildId, acc.wallet + amount, acc.bank);
-      } else {
-        if (acc.wallet < amount) {
-          return interaction.reply({ content: 'Not enough wallet coins to remove.', ephemeral: true });
-        }
-        updateBalance(target.id, guildId, acc.wallet - amount, acc.bank);
-      }
-
-      return interaction.reply(`💰 Updated ${target.username}'s wallet.`);
-    }
-
-    if (name === 'balance') {
-      const target = interaction.options.getUser('user') || interaction.user;
-      const acc = account(target.id, guildId);
-      return interaction.reply(
-        `💰 **${target.username}**\nWallet: **${acc.wallet}**\nBank: **${acc.bank}**`
-      );
-    }
-
-    if (name === 'daily') {
-      const acc = account(userId, guildId);
-      const now = Date.now();
-
-      if (now - acc.last_daily < 86400000) {
-        const remaining = Math.ceil((86400000 - (now - acc.last_daily)) / 3600000);
-        return interaction.reply({ content: `⏳ Daily already claimed. Try again in about ${remaining} hour(s).`, ephemeral: true });
-      }
-
-      db.prepare('UPDATE users SET wallet = wallet + 500, last_daily = ? WHERE user_id = ? AND guild_id = ?')
-        .run(now, userId, guildId);
-
-      return interaction.reply('🎁 You claimed **500 coins**!');
-    }
-
-    if (name === 'work') {
-      const amount = Math.floor(Math.random() * 201) + 100;
-      account(userId, guildId);
-      db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ? AND guild_id = ?')
-        .run(amount, userId, guildId);
-      return interaction.reply(`🛠️ You worked and earned **${amount} coins**!`);
-    }
-
-    if (name === 'give') {
-      const target = interaction.options.getUser('user');
-      const amount = interaction.options.getInteger('amount');
-
-      if (target.bot || target.id === userId) {
-        return interaction.reply({ content: 'Choose another human member.', ephemeral: true });
-      }
-
-      const acc = account(userId, guildId);
-      account(target.id, guildId);
-
-      if (acc.wallet < amount) {
-        return interaction.reply({ content: '❌ Not enough wallet coins.', ephemeral: true });
-      }
-
-      db.prepare('UPDATE users SET wallet = wallet - ? WHERE user_id = ? AND guild_id = ?')
-        .run(amount, userId, guildId);
-      db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ? AND guild_id = ?')
-        .run(amount, target.id, guildId);
-
-      return interaction.reply(`💸 Sent **${amount} coins** to ${target}.`);
-    }
-
-    if (name === 'leaderboard') {
-      const rows = db.prepare(
-        'SELECT user_id, wallet, bank FROM users WHERE guild_id = ? ORDER BY wallet + bank DESC LIMIT 10'
-      ).all(guildId);
-
-      const text = rows.length
-        ? rows.map((r, i) => `**${i + 1}.** <@${r.user_id}> — ${r.wallet + r.bank} coins`).join('\n')
-        : 'No economy accounts yet.';
-
-      return interaction.reply({ content: `🏆 **Economy Leaderboard**\n${text}` });
-    }
-
-    if (name === 'shop') {
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('🛍️ Chilly Shop')
-            .setColor(0x57F287)
-            .setDescription(Object.entries(shopItems).map(([item, price]) => `**${item}** — ${price.toLocaleString()} coins`).join('\n'))
-        ],
-        ephemeral: true
-      });
-    }
-
-    if (name === 'buy') {
-      const item = interaction.options.getString('item');
-      const price = shopItems[item];
-      const acc = account(userId, guildId);
-
-      if (acc.wallet < price) {
-        return interaction.reply({ content: '❌ Not enough coins.', ephemeral: true });
-      }
-
-      updateBalance(userId, guildId, acc.wallet - price, acc.bank);
-      db.prepare('INSERT INTO inventory (guild_id, user_id, item) VALUES (?, ?, ?)')
-        .run(guildId, userId, item);
-
-      return interaction.reply(`✅ Purchased **${item}** for ${price.toLocaleString()} coins!`);
-    }
-
-    if (name === 'inventory') {
-      const rows = db.prepare(
-        'SELECT item FROM inventory WHERE guild_id = ? AND user_id = ?'
-      ).all(guildId, userId);
-
-      return interaction.reply({
-        content: rows.length
-          ? `🎒 Your items:\n${rows.map(r => `• ${r.item}`).join('\n')}`
-          : 'Your inventory is empty.',
-        ephemeral: true
-      });
-    }
-
-    if (['warn', 'warnings', 'clear', 'timeout', 'untimeout', 'kick', 'ban', 'unban'].includes(name)) {
-      if (!isMod(interaction)) {
-        return interaction.reply({ content: '❌ You need moderation permissions.', ephemeral: true });
-      }
-
-      if (name === 'warn') {
-        const target = interaction.options.getUser('user');
-        const reason = interaction.options.getString('reason');
-
-        db.prepare('INSERT INTO warnings (guild_id, user_id, moderator_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
-          .run(guildId, target.id, userId, reason, Date.now());
-
-        return interaction.reply(`⚠️ ${target} warned. Reason: ${reason}`);
-      }
-
-      if (name === 'warnings') {
-        const target = interaction.options.getUser('user');
-        const rows = db.prepare(
-          'SELECT reason, moderator_id FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 10'
-        ).all(guildId, target.id);
-
-        return interaction.reply({
-          content: rows.length
-            ? `⚠️ Warnings for ${target.username}:\n${rows.map((r, i) => `${i + 1}. ${r.reason} — by <@${r.moderator_id}>`).join('\n')}`
-            : `${target.username} has no warnings.`,
-          ephemeral: true
-        });
-      }
-
-      if (name === 'clear') {
-        const amount = interaction.options.getInteger('amount');
-        const channel = interaction.channel;
-
-        if (!channel.bulkDelete) {
-          return interaction.reply({ content: 'This channel does not support bulk delete.', ephemeral: true });
-        }
-
-        await channel.bulkDelete(amount, true);
-        return interaction.reply({ content: `🧹 Deleted ${amount} messages.`, ephemeral: true });
-      }
-
-      if (name === 'unban') {
-        const id = interaction.options.getString('userid');
-        await interaction.guild.members.unban(id);
-        return interaction.reply(`✅ Unbanned user ID ${id}.`);
-      }
-
-      const target = interaction.options.getUser('user');
-      const member = await interaction.guild.members.fetch(target.id);
-
-      if (name === 'timeout') {
-        const minutes = interaction.options.getInteger('minutes');
-        const reason = interaction.options.getString('reason') || 'No reason provided';
-        await member.timeout(minutes * 60000, reason);
-        return interaction.reply(`⏳ Timed out ${target} for ${minutes} minute(s).`);
-      }
-
-      if (name === 'untimeout') {
-        await member.timeout(null);
-        return interaction.reply(`✅ Timeout removed for ${target}.`);
-      }
-
-      const reason = interaction.options.getString('reason') || 'No reason provided';
-
-      if (name === 'kick') {
-        await member.kick(reason);
-        return interaction.reply(`👢 Kicked ${target}. Reason: ${reason}`);
-      }
-
-      if (name === 'ban') {
-        await member.ban({ reason });
-        return interaction.reply(`🔨 Banned ${target}. Reason: ${reason}`);
-      }
-    }
-
-    if (name === '8ball') {
-      const answers = [
-        'Absolutely!', 'Definitely not.', 'Maybe!', 'Ask again later.',
-        'It looks promising.', 'I do not think so.', 'Without a doubt!'
-      ];
-      return interaction.reply(`🎱 ${answers[Math.floor(Math.random() * answers.length)]}`);
-    }
-
-    if (name === 'coinflip') {
-      return interaction.reply(`🪙 It's **${Math.random() < 0.5 ? 'Heads' : 'Tails'}**!`);
-    }
-
-    if (name === 'dice') {
-      return interaction.reply(`🎲 You rolled **${Math.floor(Math.random() * 6) + 1}**.`);
-    }
-
-    if (name === 'rps') {
-      const userChoice = interaction.options.getString('choice');
-      const choices = ['rock', 'paper', 'scissors'];
-      const botChoice = choices[Math.floor(Math.random() * choices.length)];
-
-      let result = 'It is a draw!';
-      if (
-        (userChoice === 'rock' && botChoice === 'scissors') ||
-        (userChoice === 'paper' && botChoice === 'rock') ||
-        (userChoice === 'scissors' && botChoice === 'paper')
-      ) result = 'You win!';
-      else if (userChoice !== botChoice) result = 'I win!';
-
-      return interaction.reply(`You chose **${userChoice}**. I chose **${botChoice}**. ${result}`);
-    }
-
-    if (name === 'joke') {
-      const jokes = [
-        'Why do programmers prefer dark mode? Because light attracts bugs.',
-        'Why did the computer get cold? It left its Windows open.',
-        'Why was the math book sad? It had too many problems.'
-      ];
-      return interaction.reply(jokes[Math.floor(Math.random() * jokes.length)]);
-    }
-
-    if (name === 'ship') {
-      const a = interaction.options.getUser('user1');
-      const b = interaction.options.getUser('user2');
-      const score = Math.floor(Math.random() * 101);
-      return interaction.reply(`💞 **${a.username} + ${b.username} = ${score}%** compatibility! Just for fun.`);
-    }
-
-    if (name === 'avatar') {
-      const user = interaction.options.getUser('user') || interaction.user;
-      const embed = new EmbedBuilder()
-        .setTitle(`${user.username}'s Avatar`)
-        .setImage(user.displayAvatarURL({ size: 1024 }))
-        .setColor(0x5865F2);
-
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    if (name === 'userinfo') {
-      const user = interaction.options.getUser('user') || interaction.user;
-      const member = await interaction.guild.members.fetch(user.id).catch(() => null);
-
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`User Info: ${user.username}`)
-            .setThumbnail(user.displayAvatarURL())
-            .addFields(
-              { name: 'User ID', value: user.id },
-              { name: 'Account Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:D>` },
-              { name: 'Joined Server', value: member ? `<t:${Math.floor(member.joinedTimestamp / 1000)}:D>` : 'Unknown' }
-            )
-            .setColor(0x5865F2)
-        ]
-      });
-    }
-
-    if (name === 'serverinfo') {
-      const guild = interaction.guild;
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(guild.name)
-            .setThumbnail(guild.iconURL())
-            .addFields(
-              { name: 'Members', value: `${guild.memberCount}`, inline: true },
-              { name: 'Server ID', value: guild.id, inline: true },
-              { name: 'Created', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>` }
-            )
-            .setColor(0x5865F2)
-        ]
-      });
-    }
-
-    if (name === 'poll') {
-      const question = interaction.options.getString('question');
-      const msg = await interaction.reply({
-        content: `📊 **Poll:** ${question}`,
-        fetchReply: true,
-        allowedMentions: { parse: [] }
-      });
-
-      await msg.react('👍');
-      await msg.react('👎');
-      return;
-    }
-
-    if (name === 'calculator') {
-      const a = interaction.options.getNumber('a');
-      const b = interaction.options.getNumber('b');
-      const op = interaction.options.getString('operation');
-
-      if (op === 'divide' && b === 0) {
-        return interaction.reply({ content: '❌ Cannot divide by zero.', ephemeral: true });
-      }
-
-      const result = {
-        add: a + b,
-        subtract: a - b,
-        multiply: a * b,
-        divide: a / b
-      }[op];
-
-      return interaction.reply(`🧮 Result: **${result}**`);
-    }
-
-    if (name === 'remind') {
-      const seconds = interaction.options.getInteger('seconds');
-      const reminder = interaction.options.getString('message');
-
-      await interaction.reply(`⏰ I'll remind you in ${seconds} seconds.`);
-      setTimeout(() => {
-        interaction.user.send(`⏰ Reminder: ${reminder}`).catch(() => {});
-      }, seconds * 1000);
-      return;
-    }
-
-    if (name === 'giveaway') {
-      if (!isMod(interaction)) {
-        return interaction.reply({ content: '❌ Moderator permission required.', ephemeral: true });
-      }
-
-      const minutes = interaction.options.getInteger('minutes');
-      const prize = interaction.options.getString('prize');
-      const endsAt = Date.now() + minutes * 60000;
-
-      const msg = await interaction.reply({
-        content: `🎉 **GIVEAWAY: ${prize}**\nReact with 🎉 to enter!\nEnds <t:${Math.floor(endsAt / 1000)}:R>`,
-        fetchReply: true
-      });
-
-      await msg.react('🎉');
-
-      db.prepare('INSERT OR REPLACE INTO giveaways (message_id, guild_id, channel_id, prize, ends_at, ended) VALUES (?, ?, ?, ?, ?, 0)')
-        .run(msg.id, guildId, interaction.channelId, prize, endsAt);
-
-      const timer = setTimeout(async () => {
-        const channel = await client.channels.fetch(interaction.channelId).catch(() => null);
-        if (!channel) return;
-
-        const stored = db.prepare('SELECT ended FROM giveaways WHERE message_id = ?').get(msg.id);
-        if (!stored || stored.ended) return;
-
-        const original = await channel.messages.fetch(msg.id).catch(() => null);
-        const reaction = original?.reactions.cache.get('🎉');
-        const users = reaction ? await reaction.users.fetch() : null;
-        const participants = users
-          ? [...users.values()].filter(u => !u.bot)
-          : [];
-
-        if (!participants.length) {
-          db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?').run(msg.id);
-          await channel.send(`🎁 **${prize}** ended with no entries.`);
-          return;
-        }
-
-        const winner = participants[Math.floor(Math.random() * participants.length)];
-        db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?').run(msg.id);
-        await channel.send(`🎉 Congratulations <@${winner.id}>! You won **${prize}**!`, {
-          allowedMentions: { users: [winner.id] }
-        });
-      }, minutes * 60000);
-
-      timer.unref?.();
-      return;
-    }
-
-    if (name === 'giveaway-end' || name === 'reroll') {
-      if (!isMod(interaction)) {
-        return interaction.reply({ content: '❌ Moderator permission required.', ephemeral: true });
-      }
-
-      const messageId = interaction.options.getString('messageid');
-      const giveaway = db.prepare('SELECT * FROM giveaways WHERE message_id = ?').get(messageId);
-
-      if (!giveaway) {
-        return interaction.reply({ content: '❌ Giveaway not found.', ephemeral: true });
-      }
-
-      const channel = await client.channels.fetch(giveaway.channel_id).catch(() => null);
-      if (!channel) {
-        return interaction.reply({ content: '❌ Giveaway channel not found.', ephemeral: true });
-      }
-
-      const original = await channel.messages.fetch(messageId).catch(() => null);
-      const reaction = original?.reactions.cache.get('🎉');
-      const users = reaction ? await reaction.users.fetch() : null;
-      const participants = users
-        ? [...users.values()].filter(u => !u.bot)
-        : [];
-
-      if (!participants.length) {
-        if (name === 'giveaway-end') {
-          db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?').run(messageId);
-        }
-        return interaction.reply({ content: 'No participants found.', ephemeral: true });
-      }
-
-      if (name === 'giveaway-end') {
-        db.prepare('UPDATE giveaways SET ended = 1 WHERE message_id = ?').run(messageId);
-      }
-
-      const winner = participants[Math.floor(Math.random() * participants.length)];
-
-      await channel.send(`🎉 ${name === 'reroll' ? 'New winner' : 'Winner'}: <@${winner.id}> — prize: **${giveaway.prize}**!`, {
-        allowedMentions: { users: [winner.id] }
-      });
-
-      return interaction.reply({ content: '✅ Done.', ephemeral: true });
-    }
-
-  } catch (error) {
-    console.error(`Command /${name} failed:`, error);
-
-    const response = {
-      content: '❌ Command failed. Check bot permissions and hosting logs.',
-      ephemeral: true
-    };
-
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(response).catch(() => {});
-    } else {
-      await interaction.reply(response).catch(() => {});
-    }
+client.on('interactionCreate', async i=>{
+ try {
+  if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
+   const id=i.customId.split(':')[1];
+   const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
+   if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
+   const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
+   return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
+  if(!i.isChatInputCommand()) return;
+  const c=i.commandName, u=i.user, g=i.guild;
+  const target=i.options.getUser('user', false);
+  if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
+  if(c==='say') {
+   const channel=i.options.getChannel('channel');
+   const message=i.options.getString('message');
+   if(!channel || !channel.isTextBased() || !channel.send) return i.reply({content:'Please select a text channel.',ephemeral:true});
+   if(!channel.permissionsFor(client.user).has('SendMessages')) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
+   await channel.send({content:message, allowedMentions:{parse:[]}});
+   return i.reply({content:'✅ Message sent in '+channel+'.',ephemeral:true});
+  }
+  if(c==='money') {
+   if(u.id!==g.ownerId) return i.reply({content:'⛔ Only the server owner can use /money.',ephemeral:true});
+   const to=i.options.getUser('user');
+   const amount=i.options.getInteger('amount');
+   if(to.bot) return i.reply({content:'You cannot add coins to a bot.',ephemeral:true});
+   account(g.id,to.id);
+   db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(amount,g.id,to.id);
+   const updated=account(g.id,to.id);
+   return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
+  }
+  if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
+  if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
+   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll')
+   .setFooter({text:'Playing Powered by Spidyyy'})]});
+  if(c==='balance') {
+   const who=target||u, a=account(g.id,who.id);
+   return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
+  }
+  if(c==='daily'||c==='work') {
+   const a=account(g.id,u.id), now=Math.floor(Date.now()/1000);
+   const col=c==='daily'?'daily':'worked', cd=c==='daily'?86400:3600;
+   const amount=c==='daily'?500:Math.floor(Math.random()*201)+100;
+   if(now-a[col]<cd) return i.reply({content:'Try again in '+Math.ceil((cd-(now-a[col]))/60)+' minutes.',ephemeral:true});
+   db.prepare('UPDATE users SET coins=coins+?, '+col+'=? WHERE guild=? AND user=?').run(amount,now,g.id,u.id);
+   return i.reply('❄️ You earned **'+money(amount)+'**!');
+  }
+  if(c==='give') {
+   const to=i.options.getUser('user'), amount=i.options.getInteger('amount');
+   if(to.bot||to.id===u.id) return i.reply({content:'Choose another non-bot member.',ephemeral:true});
+   const a=account(g.id,u.id); account(g.id,to.id);
+   if(a.coins<amount) return i.reply({content:'Not enough coins.',ephemeral:true});
+   db.transaction(()=>{
+    db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(amount,g.id,u.id);
+    db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(amount,g.id,to.id);
+   })();
+   return i.reply('💸 <@'+u.id+'> gave <@'+to.id+'> **'+money(amount)+'**.');
+  }
+  if(c==='leaderboard') {
+   const rows=db.prepare('SELECT user,coins FROM users WHERE guild=? ORDER BY coins DESC LIMIT 10').all(g.id);
+   return i.reply({embeds:[new EmbedBuilder().setTitle('🏆 Coin Leaderboard')
+    .setDescription(rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — '+money(r.coins)).join('\n')||'No users yet.') ]});
+  }
+  if(c==='shop') return i.reply('🛍️ **Chilly Shop**\n🍪 Cookie: 100\n☕ Coffee: 250\n👑 Golden Crown: 1000 coins\nUse `/buy`.');
+  if(c==='buy') {
+   const item=i.options.getString('item'), price={'Cookie':100,'Coffee':250,'Golden Crown':1000}[item], a=account(g.id,u.id);
+   if(a.coins<price) return i.reply({content:'Not enough coins.',ephemeral:true});
+   db.transaction(()=>{
+    db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(price,g.id,u.id);
+    db.prepare('INSERT INTO inventory(guild,user,item,quantity) VALUES(?,?,?,1) ON CONFLICT(guild,user,item) DO UPDATE SET quantity=quantity+1').run(g.id,u.id,item);
+   })();
+   return i.reply('✅ Purchased **'+item+'**!');
+  }
+  if(c==='inventory') {
+   const who=target||u, rows=db.prepare('SELECT item,quantity FROM inventory WHERE guild=? AND user=?').all(g.id,who.id);
+   return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
+  }
+  if(c==='warn') {
+   const to=i.options.getUser('user'), reason=i.options.getString('reason');
+   db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
+   return i.reply('⚠️ Warned <@'+to.id+'>. Reason: '+reason);
+  }
+  if(c==='warnings') {
+   const to=i.options.getUser('user');
+   const rows=db.prepare('SELECT reason,moderator,created FROM warnings WHERE guild=? AND user=? ORDER BY id DESC LIMIT 10').all(g.id,to.id);
+   return i.reply({embeds:[new EmbedBuilder().setTitle('Warnings: '+to.username)
+    .setDescription(rows.map((x,n)=>(n+1)+'. '+x.reason+' — <@'+x.moderator+'>').join('\n')||'No warnings found.')]});
+  }
+  if(c==='clear') {
+   const n=i.options.getInteger('amount'), deleted=await i.channel.bulkDelete(n,true);
+   return i.reply({content:'🧹 Deleted '+deleted.size+' messages.',ephemeral:true});
+  }
+  if(c==='timeout'||c==='untimeout') {
+   const to=i.options.getUser('user'), m=await g.members.fetch(to.id);
+   if(c==='timeout') {
+    const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
+    await m.timeout(mins*60000,reason);
+    return i.reply('🔇 Timed out <@'+to.id+'> for '+mins+' minutes.');
+   }
+   await m.timeout(null);
+   return i.reply('🔊 Timeout removed for <@'+to.id+'>.');
+  }
+  if(c==='kick'||c==='ban') {
+   const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
+   const m=await g.members.fetch(to.id);
+   if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
+   if(c==='kick') await m.kick(reason); else await m.ban({reason});
+   return i.reply((c==='kick'?'👢 Kicked ':'🔨 Banned ')+'<@'+to.id+'>. Reason: '+reason);
+  }
+  if(c==='unban') {
+   await g.members.unban(i.options.getString('userid'));
+   return i.reply('✅ User unbanned.');
+  }
+  if(c==='8ball') return i.reply('🎱 '+choose(['Definitely!','Yes!','Ask again later.','Probably not.','No way!'],1)[0]);
+  if(c==='coinflip') return i.reply('🪙 '+(Math.random()<0.5?'Heads':'Tails')+'!');
+  if(c==='dice') return i.reply('🎲 You rolled '+(1+Math.floor(Math.random()*6))+'!');
+  if(c==='rps') {
+   const a=i.options.getString('choice'), b=choose(['rock','paper','scissors'],1)[0];
+   const result=a===b?'Tie!':((a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper'))?'You win!':'Chilly wins!';
+   return i.reply('You: **'+a+'** | Chilly: **'+b+'**. **'+result+'**');
+  }
+  if(c==='joke') return i.reply(choose(['Why did the computer get cold? It left its Windows open!','Why was the math book sad? Too many problems!','What do you call a sleeping dinosaur? A dino-snore!'],1)[0]);
+  if(c==='ship') {
+   const a=i.options.getUser('user1'), b=i.options.getUser('user2');
+   return i.reply('💞 '+a.username+' + '+b.username+': **'+Math.floor(Math.random()*101)+'%** compatibility!');
+  }
+  if(c==='avatar') {
+   const who=target||u;
+   return i.reply({embeds:[new EmbedBuilder().setTitle(who.username+"'s Avatar").setImage(who.displayAvatarURL({size:1024}))]});
+  }
+  if(c==='userinfo') {
+   const who=target||u, m=await g.members.fetch(who.id).catch(()=>null);
+   const e=new EmbedBuilder().setTitle('👤 '+who.username).setThumbnail(who.displayAvatarURL())
+    .addFields({name:'User ID',value:who.id},{name:'Account created',value:'<t:'+Math.floor(who.createdTimestamp/1000)+':F>'});
+   if(m&&m.joinedTimestamp) e.addFields({name:'Joined server',value:'<t:'+Math.floor(m.joinedTimestamp/1000)+':F>'});
+   return i.reply({embeds:[e]});
+  }
+  if(c==='serverinfo') return i.reply({embeds:[new EmbedBuilder().setTitle('🏠 '+g.name)
+   .addFields({name:'Members',value:String(g.memberCount),inline:true},{name:'Server ID',value:g.id})]});
+  if(c==='poll') {
+   const m=await i.reply({content:'📊 **Poll:** '+i.options.getString('question')+'\nReact ✅ for Yes or ❌ for No.',fetchReply:true});
+   await m.react('✅'); await m.react('❌'); return;
+  }
+  if(c==='calculator') {
+   const a=i.options.getNumber('a'), b=i.options.getNumber('b'), op=i.options.getString('operator');
+   if(op==='/'&&b===0) return i.reply({content:'Cannot divide by zero.',ephemeral:true});
+   const r=op==='+'?a+b:op==='-'?a-b:op==='*'?a*b:a/b;
+   return i.reply('🧮 `'+a+' '+op+' '+b+' = '+r+'`');
+  }
+  if(c==='remind') {
+   const seconds=i.options.getInteger('seconds'), msg=i.options.getString('message');
+   await i.reply({content:'⏰ Reminder set for '+seconds+' seconds.',ephemeral:true});
+   setTimeout(()=>i.followUp({content:'⏰ <@'+u.id+'> Reminder: '+msg,allowedMentions:{users:[u.id]}}).catch(()=>{}),seconds*1000);
+   return;
+  }
+  if(c==='giveaway') {
+   const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
+   const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
+   db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
+   const embed=new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 Chilly Giveaway!')
+    .setDescription('**Prize:** '+prize+'\n**Winners:** '+winners+'\n**Host:** <@'+u.id+'>\n**Ends:** <t:'+ends+':R>\n**ID:** `'+id+'`');
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
+   const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
+   db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
+   setTimeout(()=>endGiveaway(id).catch(console.error),mins*60000);
+   return;
+  }
+  if(c==='giveaway-end') {
+   const r=await endGiveaway(i.options.getString('id'));
+   return i.reply(r.error?{content:r.error,ephemeral:true}:{content:'Giveaway ended.'});
+  }
+  if(c==='reroll') {
+   const r=await endGiveaway(i.options.getString('id'),true);
+   if(r.error) return i.reply({content:r.error,ephemeral:true});
+   return i.reply(r.winners.length?'🎉 New winner(s): '+r.winners.map(x=>'<@'+x+'>').join(', '):'No entries to reroll.');
+  }
+ } catch(e) {
+  console.error('Command error:',e);
+  const p={content:'Command failed. Check bot permissions and hosting logs.',ephemeral:true};
+  if(i.deferred||i.replied) await i.followUp(p).catch(()=>{});
+  else await i.reply(p).catch(()=>{});
+ }
 });
-
-// Safe, owner-only simulation. No channels are created and no mass pings occur.
-const activeDemos = new Map();
-const cooldowns = new Map();
-
-client.on('messageCreate', async message => {
-  if (message.author.bot || !message.guild) return;
-
-  const command = message.content.trim().toLowerCase();
-  if (!['.start', '.stop'].includes(command)) return;
-
-  if (message.author.id !== message.guild.ownerId) {
-    return message.reply('❌ Only the server owner can use this command.').catch(() => {});
-  }
-
-  const guildId = message.guild.id;
-
-  if (command === '.stop') {
-    const run = activeDemos.get(guildId);
-
-    if (!run) {
-      return message.reply('ℹ️ No simulation is running.').catch(() => {});
-    }
-
-    run.cancelled = true;
-    return message.reply('🛑 Simulation stop requested.').catch(() => {});
-  }
-
-  if (activeDemos.has(guildId)) {
-    return message.reply('⚠️ Simulation is already running.').catch(() => {});
-  }
-
-  const lastRun = cooldowns.get(guildId) || 0;
-
-  if (Date.now() - lastRun < 60000) {
-    return message.reply('⏳ Please wait 60 seconds before starting again.').catch(() => {});
-  }
-
-  const run = { cancelled: false };
-  activeDemos.set(guildId, run);
-  cooldowns.set(guildId, Date.now());
-
-  try {
-    await message.reply('❄️ **Chilly simulation started!**');
-
-    const steps = [
-      'Initializing simulation...',
-      'Checking bot status...',
-      'Simulating activity...',
-      'Finishing simulation...'
-    ];
-
-    for (const step of steps) {
-      if (run.cancelled) break;
-
-      await message.channel.send({
-        content: `❄️ **NUKED BY SPIDYYY — SIMULATION ONLY**\n@everyone\n${step}`,
-        allowedMentions: { parse: [] }
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 1200));
-    }
-
-    await message.channel.send(
-      run.cancelled ? '🛑 Simulation stopped.' : '✅ Simulation finished!'
-    ).catch(() => {});
-
-  } catch (error) {
-    console.error('Simulation error:', error);
-  } finally {
-    activeDemos.delete(guildId);
-  }
-});
-
 client.login(TOKEN);
