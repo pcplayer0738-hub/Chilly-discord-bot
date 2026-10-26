@@ -12,7 +12,7 @@ if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const db = new Database('chilly.sqlite');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS giveaways (
 );
 CREATE TABLE IF NOT EXISTS entries (
  giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
+);
+CREATE TABLE IF NOT EXISTS guild_settings (
+ guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0
 );
 `);
 
@@ -160,7 +163,16 @@ const commands = [
   .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
  new SlashCommandBuilder().setName('reroll').setDescription('Pick new winners')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true))
+  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+ new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation and server log channel')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
+ new SlashCommandBuilder().setName('security').setDescription('Enable or disable Chilly security protections')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('feature').setDescription('Protection feature').setRequired(true).addChoices(
+   {name:'Anti-nuke alerts',value:'antinuke'},{name:'Anti-raid alerts',value:'antiraid'},
+   {name:'Anti-link',value:'antilink'},{name:'Anti-spam',value:'antispam'},{name:'Anti-abuse',value:'antiabuse'}))
+  .addBooleanOption(o=>o.setName('enabled').setDescription('Enable or disable').setRequired(true))
 ].map(c=>c.toJSON());
 
 function account(g,u) {
@@ -199,6 +211,26 @@ async function endGiveaway(id, reroll=false) {
  }
  return {winners};
 }
+function settings(guildId) {
+ db.prepare('INSERT OR IGNORE INTO guild_settings(guild) VALUES(?)').run(guildId);
+ return db.prepare('SELECT * FROM guild_settings WHERE guild=?').get(guildId);
+}
+async function logAction(guild, embed) {
+ try {
+  const cfg=settings(guild.id);
+  if(!cfg.log_channel) return;
+  const channel=await guild.channels.fetch(cfg.log_channel).catch(()=>null);
+  if(channel && channel.isTextBased()) await channel.send({embeds:[embed]}).catch(()=>{});
+ } catch(e) { console.error('Log delivery error:',e); }
+}
+function auditEmbed(title, color, fields) {
+ return new EmbedBuilder().setColor(color).setTitle(title).addFields(fields).setTimestamp();
+}
+const recentMessages = new Map();
+const recentJoins = new Map();
+const actionCounts = new Map();
+const linkPattern = /https?:\/\/|discord\.gg\//i;
+
 client.once('ready', async()=>{
  console.log('Chilly online as '+client.user.tag);
  client.user.setPresence({
@@ -247,7 +279,7 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
-   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll')
+   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll\n**Security & Logs:** /setlogs /security')
    .setFooter({text:'Playing Powered by Spidyyy'})]});
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
@@ -397,4 +429,87 @@ client.on('interactionCreate', async i=>{
   else await i.reply(p).catch(()=>{});
  }
 });
+// Server event logging and configurable protective filters.
+client.on('messageDelete', async message => {
+ if(!message.guild || message.author?.bot) return;
+ const e=auditEmbed('🗑️ Message Deleted',0x95A5A6,[
+  {name:'Author',value:message.author?`${message.author.tag} (${message.author.id})`:'Unknown'},
+  {name:'Channel',value:`<#${message.channelId}>`},
+  {name:'Content',value:(message.content||'[No cached text]').slice(0,1000)}
+ ]);
+ await logAction(message.guild,e);
+});
+client.on('channelCreate', async channel => {
+ if(!channel.guild) return;
+ const e=auditEmbed('📁 Channel Created',0x2ECC71,[{name:'Channel',value:`${channel.name} (${channel.id})`},{name:'Type',value:String(channel.type)}]);
+ await logAction(channel.guild,e);
+});
+client.on('channelDelete', async channel => {
+ if(!channel.guild) return;
+ const cfg=settings(channel.guild.id);
+ const e=auditEmbed('🗑️ Channel Deleted',0xE74C3C,[{name:'Channel',value:`${channel.name} (${channel.id})`}]);
+ await logAction(channel.guild,e);
+ if(cfg.antinuke) await logAction(channel.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A channel was deleted.'},{name:'Channel',value:channel.name},{name:'Action',value:'Alert only; no automatic punishment was applied.'}]));
+});
+client.on('roleDelete', async role => {
+ const cfg=settings(role.guild.id);
+ await logAction(role.guild,auditEmbed('🗑️ Role Deleted',0xE74C3C,[{name:'Role',value:`${role.name} (${role.id})`}]));
+ if(cfg.antinuke) await logAction(role.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A role was deleted.'},{name:'Role',value:role.name},{name:'Action',value:'Alert only; check Audit Log and secure staff permissions.'}]));
+});
+client.on('guildBanAdd', async ban => {
+ const e=auditEmbed('🔨 Member Banned',0xE74C3C,[{name:'Member',value:`${ban.user.tag} (${ban.user.id})`},{name:'Reason',value:ban.reason||'Not provided'}]);
+ await logAction(ban.guild,e);
+});
+client.on('guildMemberRemove', async member => {
+ try {
+  const logs=await member.guild.fetchAuditLogs({type:20,limit:5});
+  const entry=logs.entries.find(x=>x.target?.id===member.id && Date.now()-x.createdTimestamp<10000);
+  if(entry) await logAction(member.guild,auditEmbed('👢 Member Kicked',0xE67E22,[{name:'Member',value:`${member.user.tag} (${member.id})`},{name:'Moderator',value:entry.executor?`${entry.executor.tag} (${entry.executor.id})`:'Unknown'},{name:'Reason',value:entry.reason||'Not provided'}]));
+ } catch(e) { console.error('Kick audit lookup failed:',e); }
+ const cfg=settings(member.guild.id);
+ if(cfg.antiraid) {
+  const now=Date.now(), list=(recentJoins.get(member.guild.id)||[]).filter(t=>now-t<60000);
+  if(list.length>=8) await logAction(member.guild,auditEmbed('🚨 Anti-raid Alert',0xE74C3C,[{name:'Event',value:'High member join/leave activity detected.'},{name:'Action',value:'Alert only; review verification and invite settings.'}]));
+ }
+});
+client.on('guildMemberAdd', async member => {
+ const cfg=settings(member.guild.id);
+ if(!cfg.antiraid) return;
+ const now=Date.now(), list=(recentJoins.get(member.guild.id)||[]).filter(t=>now-t<30000);
+ list.push(now); recentJoins.set(member.guild.id,list);
+ if(list.length>=6 && list.length%3===0) {
+  await logAction(member.guild,auditEmbed('🚨 Anti-raid Alert',0xE74C3C,[{name:'Detection',value:`${list.length} members joined within 30 seconds.`},{name:'Latest join',value:`${member.user.tag} (${member.id})`},{name:'Action',value:'Alert only. Consider enabling verification or temporarily pausing invites.'}]));
+ }
+});
+client.on('guildMemberUpdate', async (oldMember,newMember) => {
+ const was=oldMember.communicationDisabledUntilTimestamp, now=newMember.communicationDisabledUntilTimestamp;
+ if(was!==now) {
+  const e=auditEmbed(now?'🔇 Member Timed Out':'🔊 Member Timeout Removed',now?0xE67E22:0x2ECC71,[{name:'Member',value:`${newMember.user.tag} (${newMember.id})`},{name:'Until',value:now?`<t:${Math.floor(now/1000)}:F>`:'Timeout cleared'}]);
+  await logAction(newMember.guild,e);
+ }
+});
+client.on('messageCreate', async message => {
+ if(!message.guild || message.author.bot) return;
+ const cfg=settings(message.guild.id);
+ if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+  await message.delete().catch(()=>{});
+  await message.channel.send({content:`${message.author}, links are disabled in this server.`,allowedMentions:{users:[message.author.id]}}).then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000)).catch(()=>{});
+  await logAction(message.guild,auditEmbed('🔗 Link Blocked',0xF1C40F,[{name:'Member',value:`${message.author.tag} (${message.author.id})`},{name:'Channel',value:`${message.channel}`},{name:'Content',value:message.content.slice(0,900)}]));
+  return;
+ }
+ if(cfg.antispam) {
+  const key=`${message.guild.id}:${message.author.id}`, now=Date.now();
+  const arr=(recentMessages.get(key)||[]).filter(t=>now-t<7000); arr.push(now); recentMessages.set(key,arr);
+  if(arr.length>=6 && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+   await message.delete().catch(()=>{});
+   await logAction(message.guild,auditEmbed('🚫 Anti-spam Triggered',0xE67E22,[{name:'Member',value:`${message.author.tag} (${message.author.id})`},{name:'Channel',value:`${message.channel}`},{name:'Detection',value:'6 messages within 7 seconds.'}]));
+   recentMessages.set(key,[]);
+  }
+ }
+ if(cfg.antiabuse && /\b(?:idiot|stupid)\b/i.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+  await message.delete().catch(()=>{});
+  await logAction(message.guild,auditEmbed('⚠️ Anti-abuse Filter',0xF1C40F,[{name:'Member',value:`${message.author.tag} (${message.author.id})`},{name:'Channel',value:`${message.channel}`},{name:'Action',value:'Message removed by configured word filter.'}]));
+ }
+});
+
 client.login(TOKEN);
