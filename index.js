@@ -12,7 +12,7 @@ if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const db = new Database('chilly.sqlite');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -190,7 +190,7 @@ async function endGiveaway(id, reroll=false) {
     const m=await ch.messages.fetch(g.message).catch(()=>null);
     if(m) await m.edit({
      embeds:[new EmbedBuilder().setTitle('🎉 Giveaway Ended')
-      .setDescription('Prize: '+g.prize+'\nWinners: '+(winners.map(x=>'<@'+x+'>').join(', ')||'No entries')+'\nID: '+id)],
+      .setDescription('Prize: '+g.prize+'\nParticipants: '+entries.length+'\nWinners: '+(winners.map(x=>'<@'+x+'>').join(', ')||'No entries')+'\nID: '+id)],
      components:[]
     }).catch(()=>{});
    }
@@ -221,6 +221,19 @@ client.on('interactionCreate', async i=>{
    const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
    if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
    const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
+   // Refresh the giveaway embed so everyone can see the live participant count.
+   if(r.changes && g.message) {
+    const ch=await client.channels.fetch(g.channel).catch(()=>null);
+    const msg=ch ? await ch.messages.fetch(g.message).catch(()=>null) : null;
+    if(msg && msg.embeds[0]) {
+     const count=db.prepare('SELECT COUNT(*) AS total FROM entries WHERE giveaway=?').get(id).total;
+     const oldEmbed=msg.embeds[0];
+     const updated=EmbedBuilder.from(oldEmbed);
+     const desc=(oldEmbed.description||'').replace(/\n\*\*Participants:\*\* \d+/, '');
+     updated.setDescription(desc+'\n**Participants:** '+count);
+     await msg.edit({embeds:[updated]}).catch(console.error);
+    }
+   }
    return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
   if(!i.isChatInputCommand()) return;
@@ -374,7 +387,7 @@ client.on('interactionCreate', async i=>{
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
    const embed=new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 Chilly Giveaway!')
-    .setDescription('**Prize:** '+prize+'\n**Winners:** '+winners+'\n**Host:** <@'+u.id+'>\n**Ends:** <t:'+ends+':R>\n**ID:** `'+id+'`');
+    .setDescription('**Prize:** '+prize+'\n**Winners:** '+winners+'\n**Participants:** 0\n**Host:** <@'+u.id+'>\n**Ends:** <t:'+ends+':R>\n**ID:** `'+id+'`');
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
    const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
@@ -397,4 +410,79 @@ client.on('interactionCreate', async i=>{
   else await i.reply(p).catch(()=>{});
  }
 });
+
+// Limited, server-owner-only demo commands: .start and .stop
+// This is intentionally capped to avoid infinite channel creation or message spam.
+const DEMO_CHANNEL_LIMIT = 3;
+const DEMO_MESSAGE_LIMIT = 3;
+const DEMO_COOLDOWN_MS = 60_000;
+const demoCooldowns = new Map();
+const activeDemos = new Set();
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild) return;
+  const command = message.content.trim().toLowerCase();
+  if (command !== '.start' && command !== '.stop') return;
+
+  const guild = message.guild;
+  if (message.author.id !== guild.ownerId) {
+    await message.reply('❌ Only the server owner can use this command.').catch(() => {});
+    return;
+  }
+
+  if (command === '.stop') {
+    const wasRunning = activeDemos.has(guild.id);
+    activeDemos.delete(guild.id);
+    await message.reply(wasRunning ? '🛑 Demo stop requested.' : 'ℹ️ No demo is running.').catch(() => {});
+    return;
+  }
+
+  if (activeDemos.has(guild.id)) {
+    await message.reply('⚠️ A demo is already running. Use `.stop` to request cancellation.').catch(() => {});
+    return;
+  }
+
+  const lastUsed = demoCooldowns.get(guild.id) || 0;
+  if (Date.now() - lastUsed < DEMO_COOLDOWN_MS) {
+    await message.reply('⏳ Please wait 60 seconds between demo runs.').catch(() => {});
+    return;
+  }
+
+  const me = guild.members.me;
+  if (!me || !me.permissions.has('ManageChannels') || !me.permissions.has('SendMessages')) {
+    await message.reply('❌ Chilly needs **Manage Channels** and **Send Messages** permissions.').catch(() => {});
+    return;
+  }
+
+  activeDemos.add(guild.id);
+  demoCooldowns.set(guild.id, Date.now());
+  try {
+    await message.reply('❄️ Starting the limited demo (maximum 3 channels and 9 messages).');
+    for (let i = 1; i <= DEMO_CHANNEL_LIMIT; i++) {
+      if (!activeDemos.has(guild.id)) break;
+      const channel = await guild.channels.create({
+        name: `nuked-by-spidyyy-${i}`,
+        type: 0,
+        reason: `Limited Chilly demo requested by server owner ${message.author.tag}`
+      });
+      for (let j = 0; j < DEMO_MESSAGE_LIMIT; j++) {
+        if (!activeDemos.has(guild.id)) break;
+        await channel.send(
+          `❄️ **Chilly Demo** — this is a limited test, not a real raid.\nJoin our server: https://discord.gg/YADHWbTP7b`
+        );
+      }
+    }
+    if (activeDemos.has(guild.id)) {
+      await message.channel.send('✅ Limited demo finished.').catch(() => {});
+    } else {
+      await message.channel.send('🛑 Demo stopped.').catch(() => {});
+    }
+  } catch (error) {
+    console.error('Demo command error:', error);
+    await message.channel.send('❌ Demo stopped because of an error.').catch(() => {});
+  } finally {
+    activeDemos.delete(guild.id);
+  }
+});
+
 client.login(TOKEN);
