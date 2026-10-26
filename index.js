@@ -197,7 +197,7 @@ client.on('interactionCreate', async i=>{
   if(!i.isChatInputCommand()) return;
 
   const c=i.commandName, u=i.user, g=i.guild;
-  const target=i.options.getUser('user');
+  const target=i.options.getUser('user', false);
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
 
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
