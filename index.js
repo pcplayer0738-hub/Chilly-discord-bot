@@ -226,6 +226,34 @@ async function logAction(guild, embed) {
 function auditEmbed(title, color, fields) {
  return new EmbedBuilder().setColor(color).setTitle(title).addFields(fields).setTimestamp();
 }
+
+// Shared Chilly moderation embed style. Custom emoji IDs are from the user's server.
+const CHILLY_EMOJI = {
+ member: '<:member:1564341313296539709>',
+ moderator: '<:wtick:1564341377368596650>',
+ dot: '<:bdot:1564342958931574864>',
+ inbox: '<:inboxmail:1421444209021419601>',
+ success: '<:Tick:1421447669288800298>',
+ arrow: '<a:ARROW:1257263292456370236>',
+ gift: '<:gift:1564343034370326660>',
+ animatedGift: '<a:3899gift:1522045093685760011>'
+};
+function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
+ const embed = new EmbedBuilder()
+  .setColor(0x36CFC7)
+  .setTitle(title)
+  .setDescription(`${CHILLY_EMOJI.member} **${targetLabel}:** ${targetName}${targetId ? ` (\`${targetId}\`)` : ''}
+${CHILLY_EMOJI.moderator} **Moderator:** ${moderator}`)
+  .setFooter({text:'Chilly Moderation'})
+  .setTimestamp();
+ if (avatar) embed.setThumbnail(avatar);
+ const fields=[];
+ if (duration) fields.push({name:`${CHILLY_EMOJI.dot} Duration`,value:duration,inline:false});
+ if (dmDone !== undefined) fields.push({name:`${CHILLY_EMOJI.inbox} DM Done?`,value:dmDone ? CHILLY_EMOJI.success : '❌ Failed / unavailable',inline:false});
+ fields.push({name:`${CHILLY_EMOJI.arrow} Reason`,value:(reason || 'No reason provided').slice(0,1024),inline:false});
+ embed.addFields(fields);
+ return embed;
+}
 const recentMessages = new Map();
 const recentJoins = new Map();
 const actionCounts = new Map();
@@ -323,10 +351,45 @@ client.on('interactionCreate', async i=>{
    const who=target||u, rows=db.prepare('SELECT item,quantity FROM inventory WHERE guild=? AND user=?').all(g.id,who.id);
    return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
   }
+  if(c==='setlogs') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return i.reply({content:'You need Manage Server permission to set the log channel.',ephemeral:true});
+   }
+   const channel=i.options.getChannel('channel');
+   if(!channel || !channel.isTextBased()) {
+    return i.reply({content:'Please select a text channel.',ephemeral:true});
+   }
+   const botPerms=channel.permissionsFor(client.user);
+   if(!botPerms?.has(PermissionFlagsBits.ViewChannel) || !botPerms?.has(PermissionFlagsBits.SendMessages) || !botPerms?.has(PermissionFlagsBits.EmbedLinks)) {
+    return i.reply({content:'I need View Channel, Send Messages, and Embed Links permissions in that channel.',ephemeral:true});
+   }
+   settings(g.id);
+   db.prepare('UPDATE guild_settings SET log_channel=? WHERE guild=?').run(channel.id,g.id);
+   return i.reply({content:'✅ Moderation and server logs will be sent to '+channel+'.',ephemeral:true});
+  }
+  if(c==='security') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return i.reply({content:'You need Manage Server permission to change security settings.',ephemeral:true});
+   }
+   const feature=i.options.getString('feature');
+   const enabled=i.options.getBoolean('enabled');
+   const allowedFeatures=['antinuke','antiraid','antilink','antispam','antiabuse'];
+   if(!allowedFeatures.includes(feature) || typeof enabled!=='boolean') {
+    return i.reply({content:'Invalid security feature or setting.',ephemeral:true});
+   }
+   settings(g.id);
+   db.prepare(`UPDATE guild_settings SET ${feature}=? WHERE guild=?`).run(enabled?1:0,g.id);
+   const names={antinuke:'Anti-nuke alerts',antiraid:'Anti-raid alerts',antilink:'Anti-link',antispam:'Anti-spam',antiabuse:'Anti-abuse'};
+   return i.reply({embeds:[new EmbedBuilder().setColor(enabled?0x2ECC71:0xE74C3C).setTitle('❄️ Chilly Security Settings').setDescription(`${enabled?'✅ Enabled':'❌ Disabled'} **${names[feature]}**.`).setFooter({text:'Chilly Security'}).setTimestamp()],ephemeral:true});
+  }
   if(c==='warn') {
-   const to=i.options.getUser('user'), reason=i.options.getString('reason');
+   const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
+   let dmDone=false;
+   try { await to.send({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
-   return i.reply('⚠️ Warned <@'+to.id+'>. Reason: '+reason);
+   const embed=moderationEmbed({title:'User has been warned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
+   await logAction(g,embed);
+   return i.reply({embeds:[embed]});
   }
   if(c==='warnings') {
    const to=i.options.getUser('user');
@@ -340,24 +403,45 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='timeout'||c==='untimeout') {
    const to=i.options.getUser('user'), m=await g.members.fetch(to.id);
+   if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
    if(c==='timeout') {
     const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
+    let dmDone=false;
+    try { await to.send({embeds:[moderationEmbed({title:'You have been timed out!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
     await m.timeout(mins*60000,reason);
-    return i.reply('🔇 Timed out <@'+to.id+'> for '+mins+' minutes.');
+    const embed=moderationEmbed({title:'User has been timed out!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,duration:`${mins} minute(s)`,dmDone,avatar:to.displayAvatarURL()});
+    await logAction(g,embed);
+    return i.reply({embeds:[embed]});
    }
-   await m.timeout(null);
-   return i.reply('🔊 Timeout removed for <@'+to.id+'>.');
+   const reason='Timeout removed';
+   let dmDone=false;
+   try { await to.send({embeds:[moderationEmbed({title:'Your timeout has been removed!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
+   await m.timeout(null,reason);
+   const embed=moderationEmbed({title:'User has been unmuted!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
+   await logAction(g,embed);
+   return i.reply({embeds:[embed]});
   }
   if(c==='kick'||c==='ban') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
    const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
+   let dmDone=false;
+   try { await to.send({embeds:[moderationEmbed({title:c==='kick'?'You have been kicked!':'You have been banned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    if(c==='kick') await m.kick(reason); else await m.ban({reason});
-   return i.reply((c==='kick'?'👢 Kicked ':'🔨 Banned ')+'<@'+to.id+'>. Reason: '+reason);
+   const embed=moderationEmbed({title:c==='kick'?'User has been kicked!':'User has been banned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
+   await logAction(g,embed);
+   return i.reply({embeds:[embed]});
   }
   if(c==='unban') {
-   await g.members.unban(i.options.getString('userid'));
-   return i.reply('✅ User unbanned.');
+   const id=i.options.getString('userid'), reason='Unban command used';
+   let to=null;
+   try { to=await client.users.fetch(id); } catch {}
+   await g.members.unban(id,reason);
+   let dmDone=false;
+   if(to) { try { await to.send({embeds:[moderationEmbed({title:'You have been unbanned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {} }
+   const embed=moderationEmbed({title:'User has been unbanned!',targetLabel:'User',targetName:to ? to.tag : `\`${id}\``,targetId:id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to?.displayAvatarURL()});
+   await logAction(g,embed);
+   return i.reply({embeds:[embed]});
   }
   if(c==='8ball') return i.reply('🎱 '+choose(['Definitely!','Yes!','Ask again later.','Probably not.','No way!'],1)[0]);
   if(c==='coinflip') return i.reply('🪙 '+(Math.random()<0.5?'Heads':'Tails')+'!');
@@ -405,8 +489,9 @@ client.on('interactionCreate', async i=>{
    const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
-   const embed=new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 Chilly Giveaway!')
-    .setDescription('**Prize:** '+prize+'\n**Winners:** '+winners+'\n**Host:** <@'+u.id+'>\n**Ends:** <t:'+ends+':R>\n**ID:** `'+id+'`');
+   const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} New Giveaway ${CHILLY_EMOJI.gift}`)
+    .setDescription(`${CHILLY_EMOJI.animatedGift} **${prize}**\n\n${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R>\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>`)
+    .setFooter({text:`Ends at`}).setTimestamp(new Date(ends*1000));
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
    const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
