@@ -1,22 +1,24 @@
-Chilly fake-nuke effect
-=======================
+CHILLY FIXED .START / .STOP FILE
+================================
 
-Files:
-- chilly-fake-nuke-snippet.js: safe `.start` / `.stop` handler for Discord.js v14.
+This is an ADD-ON snippet, not a replacement for your whole index.js.
 
-How to use:
-1. Back up your current index.js.
-2. Open index.js and find where `const client = new Client(...)` is created.
-3. Paste the snippet AFTER the client is created and before `client.login(...)`.
-4. Do not paste it inside another event handler.
-5. Commit and restart your bot.
+FIX FOR THE STARTUP ERROR:
+The previous crash happened because `client.on(...)` was placed before `client` existed.
 
-Behavior:
-- `.start` posts a short simulated sequence in the channel where it was invoked.
-- `.stop` requests cancellation.
-- Requires Server Owner or Manage Server permission.
-- Does not create/delete channels, modify server name, ping @everyone, or flood existing channels.
-- Requires the Message Content Intent to be enabled in the Discord Developer Portal and in your Client intents.
+INSTALL ON ANDROID:
+1. Open your GitHub repository and edit index.js.
+2. Find your existing line that creates the Discord client:
+   const client = new Client({ ... });
+3. Paste the contents of chilly-fixed-start-stop.js AFTER that client creation
+   and BEFORE client.login(...).
+4. Do NOT add another `const client = new Client(...)`.
+5. Do NOT paste this inside another event handler.
+6. Commit the change and tap Redeploy on FadeHost.
 
-Important:
-This is a snippet, not a replacement for your full index.js. It avoids overwriting your current economy, giveaway, and moderation code.
+REQUIREMENTS:
+- Your existing Discord client must have Guilds, GuildMessages, and MessageContent intents.
+- Message Content Intent must also be enabled in the Discord Developer Portal.
+- This sequence is simulated only: it does not create channels, mass-mention @everyone,
+  rename the server, or flood other channels.
+- Server owner or a member with Manage Server permission can use .start and .stop.
