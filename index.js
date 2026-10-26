@@ -2,8 +2,6 @@
 // IMPORTANT: Paste this handler AFTER your existing `const client = new Client(...)`
 // and BEFORE `client.login(...)`. Do NOT create a second client.
 
-const fakeNukeRuns = new Map();
-
 // Chilly .start / .stop
 const fakeNukeRuns = new Map();
 
