@@ -1,5 +1,5 @@
 const {
-  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder,
+  Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
   ButtonStyle, ActivityType
 } = require('discord.js');
@@ -71,6 +71,12 @@ ensureColumn('entries', 'user', 'TEXT');
 const commands = [
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+ new SlashCommandBuilder().setName('say').setDescription('Send a message to a selected channel')
+  .addChannelOption(o=>o.setName('channel').setDescription('Channel to send the message in').addChannelTypes(ChannelType.GuildText).setRequired(true))
+  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true)),
+ new SlashCommandBuilder().setName('money').setDescription('Add coins to a member (server owner only)')
+  .addUserOption(o=>o.setName('user').setDescription('Member receiving coins').setRequired(true))
+  .addIntegerOption(o=>o.setName('amount').setDescription('Coins to add').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
@@ -221,9 +227,27 @@ client.on('interactionCreate', async i=>{
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
+  if(c==='say') {
+   const channel=i.options.getChannel('channel');
+   const message=i.options.getString('message');
+   if(!channel || !channel.isTextBased() || !channel.send) return i.reply({content:'Please select a text channel.',ephemeral:true});
+   if(!channel.permissionsFor(client.user).has('SendMessages')) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
+   await channel.send({content:message, allowedMentions:{parse:[]}});
+   return i.reply({content:'✅ Message sent in '+channel+'.',ephemeral:true});
+  }
+  if(c==='money') {
+   if(u.id!==g.ownerId) return i.reply({content:'⛔ Only the server owner can use /money.',ephemeral:true});
+   const to=i.options.getUser('user');
+   const amount=i.options.getInteger('amount');
+   if(to.bot) return i.reply({content:'You cannot add coins to a bot.',ephemeral:true});
+   account(g.id,to.id);
+   db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(amount,g.id,to.id);
+   const updated=account(g.id,to.id);
+   return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
+  }
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
-   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll')
+   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll')
    .setFooter({text:'Playing Powered by Spidyyy'})]});
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
