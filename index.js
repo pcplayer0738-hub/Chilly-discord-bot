@@ -4,51 +4,50 @@
 
 const fakeNukeRuns = new Map();
 
+// Chilly .start / .stop
+const fakeNukeRuns = new Map();
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
 
   const command = message.content.trim().toLowerCase();
-  if (command !== '.start' && command !== '.stop') return;
+  if (!['.start', '.stop'].includes(command)) return;
 
-  const canManage =
+  const allowed =
     message.author.id === message.guild.ownerId ||
     message.member?.permissions.has('ManageGuild');
 
-  if (!canManage) {
-    await message.reply('❌ You need Server Owner or Manage Server permission to use this command.');
-    return;
+  if (!allowed) {
+    return message.reply(
+      '❌ You need Server Owner or Manage Server permission.'
+    );
   }
-
-  const guildId = message.guild.id;
 
   if (command === '.stop') {
-    const currentRun = fakeNukeRuns.get(guildId);
-    if (currentRun) currentRun.cancelled = true;
-    await message.reply('🛑 Fake nuke sequence stopped.');
-    return;
+    const run = fakeNukeRuns.get(message.guild.id);
+    if (run) run.cancelled = true;
+    return message.reply('🛑 Sequence stopped.');
   }
 
-  if (fakeNukeRuns.has(guildId)) {
-    await message.reply('⚠️ A sequence is already running. Use `.stop` first.');
-    return;
+  if (fakeNukeRuns.has(message.guild.id)) {
+    return message.reply('⚠️ A sequence is already running.');
   }
 
   const run = { cancelled: false };
-  fakeNukeRuns.set(guildId, run);
+  fakeNukeRuns.set(message.guild.id, run);
 
   try {
     await message.reply(
       '☢️ **NUKED BY SPIDYYY — SIMULATION** ☢️\n' +
-      'Starting fake sequence…\n' +
-      'No channels are being created or modified.'
+      'Starting sequence… No server changes will be made.'
     );
 
     const steps = [
-      '▰▱▱▱▱ Initializing sequence…',
+      '▰▱▱▱▱ Initializing…',
       '▰▰▱▱▱ Scanning channels…',
-      '▰▰▰▱▱ Simulating message flood…',
-      '▰▰▰▰▱ Finalizing effect…',
-      '✅ **Simulation complete.** No server changes were made.'
+      '▰▰▰▱▱ Simulating activity…',
+      '▰▰▰▰▱ Finalizing…',
+      '✅ Simulation complete!'
     ];
 
     for (const step of steps) {
@@ -61,14 +60,10 @@ client.on('messageCreate', async (message) => {
 
       await new Promise(resolve => setTimeout(resolve, 1200));
     }
-
-    if (run.cancelled) {
-      await message.channel.send('🛑 Fake nuke sequence cancelled.');
-    }
   } catch (error) {
-    console.error('Fake nuke sequence error:', error);
-    await message.channel.send('❌ Could not complete the sequence.').catch(() => {});
+    console.error('Sequence error:', error);
+    await message.channel.send('❌ Sequence failed.').catch(() => {});
   } finally {
-    fakeNukeRuns.delete(guildId);
+    fakeNukeRuns.delete(message.guild.id);
   }
 });
