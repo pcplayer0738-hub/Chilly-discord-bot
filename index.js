@@ -12,7 +12,7 @@ if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const db = new Database('chilly.sqlite');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS giveaways (
 CREATE TABLE IF NOT EXISTS entries (
  giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
 );
+CREATE TABLE IF NOT EXISTS invite_counts (guild TEXT, user TEXT, invites INTEGER DEFAULT 0, PRIMARY KEY(guild,user));
 CREATE TABLE IF NOT EXISTS guild_settings (
  guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0
 );
@@ -84,6 +85,11 @@ const commands = [
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
  new SlashCommandBuilder().setName('work').setDescription('Earn coins by working'),
+ new SlashCommandBuilder().setName('slots').setDescription('Bet Chilly Coins on the slot machine')
+  .addIntegerOption(o=>o.setName('bet').setDescription('Coins to bet').setMinValue(1).setMaxValue(1000000).setRequired(true)),
+ new SlashCommandBuilder().setName('invites').setDescription('Check your tracked invites')
+  .addUserOption(o=>o.setName('user').setDescription('Member to check')),
+ new SlashCommandBuilder().setName('invites-leaderboard').setDescription('Top inviters in this server'),
  new SlashCommandBuilder().setName('give').setDescription('Give coins to a member')
   .addUserOption(o=>o.setName('user').setDescription('Recipient').setRequired(true))
   .addIntegerOption(o=>o.setName('amount').setDescription('Amount').setMinValue(1).setRequired(true)),
@@ -131,9 +137,9 @@ const commands = [
   .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
  new SlashCommandBuilder().setName('coinflip').setDescription('Flip a coin'),
  new SlashCommandBuilder().setName('dice').setDescription('Roll a dice'),
- new SlashCommandBuilder().setName('rps').setDescription('Rock paper scissors')
-  .addStringOption(o=>o.setName('choice').setDescription('Choose').setRequired(true)
-   .addChoices({name:'Rock',value:'rock'},{name:'Paper',value:'paper'},{name:'Scissors',value:'scissors'})),
+ new SlashCommandBuilder().setName('rps').setDescription('Challenge a real member to RPS for Chilly Coins')
+  .addUserOption(o=>o.setName('opponent').setDescription('Member to challenge').setRequired(true))
+  .addIntegerOption(o=>o.setName('bet').setDescription('Coins each player bets').setMinValue(1).setMaxValue(1000000).setRequired(true)),
  new SlashCommandBuilder().setName('joke').setDescription('Get a clean joke'),
  new SlashCommandBuilder().setName('ship').setDescription('Compatibility score')
   .addUserOption(o=>o.setName('user1').setDescription('First member').setRequired(true))
@@ -278,6 +284,26 @@ client.once('ready', async()=>{
 });
 client.on('interactionCreate', async i=>{
  try {
+  if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
+   const [,gameId,choice]=i.customId.split(':'); const game=rpsGames.get(gameId);
+   if(!game) return i.reply({content:'This RPS game is no longer active.',ephemeral:true});
+   if(![game.challenger,game.opponent].includes(i.user.id)) return i.reply({content:'You are not part of this RPS game.',ephemeral:true});
+   game.picks[i.user.id]=choice;
+   await i.reply({content:'Your choice is locked in: **'+choice+'**.',ephemeral:true});
+   if(game.picks[game.challenger]&&game.picks[game.opponent]) {
+    const a=game.picks[game.challenger], b=game.picks[game.opponent];
+    const win=(a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper');
+    if(a===b) {
+     db.transaction(()=>{db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet,game.guild,game.challenger);db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet,game.guild,game.opponent);})();
+    } else if(win) db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet*2,game.guild,game.challenger);
+    else db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet*2,game.guild,game.opponent);
+    const result=a===b?'It is a tie! Both bets were refunded.':'Winner: <@'+(win?game.challenger:game.opponent)+'> wins **'+money(game.bet*2)+'**!';
+    const channel=await client.channels.fetch(game.channel).catch(()=>null);
+    if(channel) await channel.send({content:'✊ **RPS Result**\n<@'+game.challenger+'> chose **'+a+'**\n<@'+game.opponent+'> chose **'+b+'**\n'+result}).catch(()=>{});
+    rpsGames.delete(gameId);
+   }
+   return;
+  }
   if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
    const id=i.customId.split(':')[1];
    const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
@@ -305,7 +331,7 @@ client.on('interactionCreate', async i=>{
     timer: {title:'<:Timer:1564649373025959957> Timer', body:'Event timer commands are not currently available in this build.'},
     moderation: {title:'<:Moderation:1564649370169905282> Moderation', body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`\n\nRequires the appropriate Discord permissions.'},
     poll: {title:'<:Poll:1564649357871947956> Polls', body:'`/poll` — Create a poll in your server.'},
-    utility: {title:'<:Utility:1564649360858550323> Utilities', body:'`/ping` · `/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/remind`\n`/balance` · `/daily` · `/work` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory`\nFun: `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship`'},
+    utility: {title:'<:Utility:1564649360858550323> Utilities', body:'`/ping` · `/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/remind`\n`/balance` · `/daily` · `/work` · `/slots` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/invites` · `/invites-leaderboard`\nText aliases: `Chilly daily`, `Chilly balance`, `Chilly work`, `Chilly slots 100` (also `c daily`, `c bal`, `c work`)\nFun: `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship`'},
     contact: {title:'<:Contact:1564649364050415686> Contact', body:'Need help with Chilly? Contact the bot/server staff for support.'}
    };
    const page=pages[i.values[0]]||pages.index;
@@ -351,6 +377,23 @@ client.on('interactionCreate', async i=>{
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
+  }
+  if(c==='slots') {
+   const bet=i.options.getInteger('bet'), a=account(g.id,u.id);
+   if(a.coins<bet) return i.reply({content:'Not enough Chilly Coins for that bet.',ephemeral:true});
+   const symbols=['🍒','🍋','🍇','⭐','🔔']; const roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]);
+   let multiplier=roll[0]===roll[1]&&roll[1]===roll[2]? (roll[0]==='⭐'?5:3) : (roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0);
+   const delta=multiplier?bet*multiplier: -bet;
+   db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(delta,g.id,u.id);
+   return i.reply('🎰 **Chilly Slots**\n'+roll.join(' | ')+'\n'+(multiplier?'🎉 You won **'+money(bet*multiplier)+'**!':'😢 You lost **'+money(bet)+'**.')+'\nBalance: **'+money(account(g.id,u.id).coins)+'**');
+  }
+  if(c==='invites') {
+   const who=target||u, row=db.prepare('SELECT invites FROM invite_counts WHERE guild=? AND user=?').get(g.id,who.id);
+   return i.reply('📨 **'+who.username+'** has **'+(row?.invites||0)+'** tracked invites.\nNote: tracking starts after this version is online; old invite history cannot be recovered.');
+  }
+  if(c==='invites-leaderboard') {
+   const rows=db.prepare('SELECT user,invites FROM invite_counts WHERE guild=? ORDER BY invites DESC LIMIT 10').all(g.id);
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('📨 Invite Leaderboard').setDescription(rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — **'+r.invites+'** invites').join('\n')||'No tracked invites yet.')]});
   }
   if(c==='daily'||c==='work') {
    const a=account(g.id,u.id), now=Math.floor(Date.now()/1000);
@@ -486,9 +529,20 @@ client.on('interactionCreate', async i=>{
   if(c==='coinflip') return i.reply('🪙 '+(Math.random()<0.5?'Heads':'Tails')+'!');
   if(c==='dice') return i.reply('🎲 You rolled '+(1+Math.floor(Math.random()*6))+'!');
   if(c==='rps') {
-   const a=i.options.getString('choice'), b=choose(['rock','paper','scissors'],1)[0];
-   const result=a===b?'Tie!':((a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper'))?'You win!':'Chilly wins!';
-   return i.reply('You: **'+a+'** | Chilly: **'+b+'**. **'+result+'**');
+   const opponent=i.options.getUser('opponent'), bet=i.options.getInteger('bet');
+   if(!opponent||opponent.bot||opponent.id===u.id) return i.reply({content:'Choose another real server member (not yourself or a bot).',ephemeral:true});
+   const opponentMember=await g.members.fetch(opponent.id).catch(()=>null);
+   if(!opponentMember) return i.reply({content:'The opponent must be a member of this server.',ephemeral:true});
+   const a=account(g.id,u.id), b=account(g.id,opponent.id);
+   if(a.coins<bet||b.coins<bet) return i.reply({content:'Both players must have at least **'+money(bet)+'** to play.',ephemeral:true});
+   db.transaction(()=>{db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(bet,g.id,u.id);db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(bet,g.id,opponent.id);})();
+   const gameId=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+   rpsGames.set(gameId,{guild:g.id,channel:i.channelId,challenger:u.id,opponent:opponent.id,bet,picks:{}});
+   const row=new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('chilly_rps:'+gameId+':rock').setLabel('🪨 Rock').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('chilly_rps:'+gameId+':paper').setLabel('📄 Paper').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('chilly_rps:'+gameId+':scissors').setLabel('✂️ Scissors').setStyle(ButtonStyle.Primary));
+   return i.reply({content:'✊ **RPS Coin Duel**\n<@'+u.id+'> challenged <@'+opponent.id+'>. Both players have wagered **'+money(bet)+'**.\nBoth players: choose your move below. Each player can choose once.',components:[row]});
   }
   if(c==='joke') return i.reply(choose(['Why did the computer get cold? It left its Windows open!','Why was the math book sad? Too many problems!','What do you call a sleeping dinosaur? A dino-snore!'],1)[0]);
   if(c==='ship') {
@@ -612,8 +666,79 @@ client.on('guildMemberUpdate', async (oldMember,newMember) => {
   await logAction(newMember.guild,e);
  }
 });
+const inviteCache = new Map();
+const rpsGames = new Map();
+client.on('ready', async () => {
+ for (const [, guild] of client.guilds.cache) {
+  try { inviteCache.set(guild.id, await guild.invites.fetch()); } catch { /* Manage Guild permission required for invite tracking */ }
+ }
+});
+client.on('inviteCreate', async invite => {
+ try { const current=await invite.guild.invites.fetch(); inviteCache.set(invite.guild.id,current); } catch {}
+});
+client.on('guildMemberAdd', async member => {
+ try {
+  const old=inviteCache.get(member.guild.id); const current=await member.guild.invites.fetch(); inviteCache.set(member.guild.id,current);
+  if(!old) return;
+  const used=current.find(inv=>{ const prev=old.get(inv.code); return inv.uses>(prev?.uses||0); });
+  if(used?.inviter && used.inviter.id!==member.id) {
+   db.prepare('INSERT INTO invite_counts(guild,user,invites) VALUES(?,?,1) ON CONFLICT(guild,user) DO UPDATE SET invites=invites+1').run(member.guild.id,used.inviter.id);
+  }
+ } catch (e) { console.error('Invite tracking:',e.message); }
+});
+
 client.on('messageCreate', async message => {
- if(!message.guild || message.author.bot) return;
+ if(message.author.bot) return;
+ // Owner-only .dm command: sends the bot advertisement to one explicitly selected user.
+ if(message.content.trim().toLowerCase().startsWith('.dm')) {
+  if(message.author.id !== '1312960418288898062') {
+   if(message.guild) await message.reply('❌ Only the bot owner can use this command.').catch(()=>{});
+   return;
+  }
+  if(!message.guild) return message.reply('Use this command in a server: `.dm @user`').catch(()=>{});
+  const target = message.mentions.users.first() || (message.content.trim().split(/\s+/)[1] ? await client.users.fetch(message.content.trim().split(/\s+/)[1].replace(/[<@!>]/g,'' )).catch(()=>null) : null);
+  if(!target) return message.reply('Usage: `.dm @user` or `.dm USER_ID`').catch(()=>{});
+  if(target.bot) return message.reply('❌ You cannot send the advertisement to a bot account.').catch(()=>{});
+  const ad = new EmbedBuilder()
+   .setColor(0xF1B735)
+   .setDescription(`Hey ${message.author}, I am **Chilly**, a multipurpose Discord bot.
+
+You have just added me to **${message.guild.name}** to enjoy moderation, giveaways, economy, utility and more. To get started, invite Chilly to your server and use **/help** to explore the available commands.
+
+**~ Powered by Spidyyy**`)
+   .setFooter({text:'Chilly • Powered by Spidyyy'});
+  try {
+   await target.send({embeds:[ad]});
+   await message.reply(`✅ Advertisement DM sent to ${target.tag}.`).catch(()=>{});
+  } catch {
+   await message.reply(`❌ I couldn't DM ${target.tag}. Their DMs may be closed or they may have blocked the bot.`).catch(()=>{});
+  }
+  return;
+ }
+ if(!message.guild) return;
+ // Short text aliases: Chilly daily/balance/work/slots, plus c daily/bal/work.
+ const raw=message.content.trim();
+ const match=raw.match(/^(?:chilly|c)\s+(daily|bal|balance|work|coin|coins|slots)(?:\s+(\d+))?$/i);
+ if(match) {
+  const cmd=match[1].toLowerCase(), amount=Number(match[2]||0), guildId=message.guild.id, userId=message.author.id;
+  const getAccount=()=>account(guildId,userId);
+  if(['bal','balance','coin','coins'].includes(cmd)) return message.reply('💰 **'+message.author.username+'** has **'+money(getAccount().coins)+'**.');
+  if(cmd==='daily'||cmd==='work') {
+   const a=getAccount(), now=Math.floor(Date.now()/1000), col=cmd==='daily'?'daily':'worked', cd=cmd==='daily'?86400:3600;
+   if(now-a[col]<cd) return message.reply('⏳ Try again in '+Math.ceil((cd-(now-a[col]))/60)+' minute(s).');
+   const earned=cmd==='daily'?500:Math.floor(Math.random()*201)+100;
+   db.prepare('UPDATE users SET coins=coins+?, '+col+'=? WHERE guild=? AND user=?').run(earned,now,guildId,userId);
+   return message.reply('❄️ You earned **'+money(earned)+'**! Balance: **'+money(getAccount().coins)+'**');
+  }
+  if(cmd==='slots') {
+   if(!amount) return message.reply('Usage: `Chilly slots 100`');
+   const a=getAccount(); if(a.coins<amount) return message.reply('❌ Not enough Chilly Coins.');
+   const symbols=['🍒','🍋','🍇','⭐','🔔'], roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]);
+   const mult=roll[0]===roll[1]&&roll[1]===roll[2]?(roll[0]==='⭐'?5:3):(roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0);
+   const delta=mult?amount*mult:-amount; db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(delta,guildId,userId);
+   return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'🎉 Won **'+money(amount*mult)+'**!':'😢 Lost **'+money(amount)+'**.')+' Balance: **'+money(getAccount().coins)+'**');
+  }
+ }
  const cfg=settings(message.guild.id);
  if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
   await message.delete().catch(()=>{});
