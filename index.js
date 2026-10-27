@@ -1,7 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType
+  ButtonStyle, ActivityType, StringSelectMenuBuilder
 } = require('discord.js');
 const Database = require('better-sqlite3');
 
@@ -296,6 +296,21 @@ client.on('interactionCreate', async i=>{
    }
    return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
+  if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
+   const pages = {
+    index: {title:'❄️ Chilly Help — Index', body:'Welcome to Chilly! Select a category from the menu to explore the bot commands and features.'},
+    invite: {title:'<:Invite:1564649286476505298> Invite Logging', body:'Invite tracking is not currently available in this build.'},
+    messages: {title:'<:Message:1564649367120642188> Messages', body:'Message-counting commands are not currently available in this build.'},
+    giveaways: {title:'<:Bluegift:1564349870385406062> Giveaways', body:'`/giveaway` — Create a giveaway\n`/giveaway-end` — End a giveaway using its ID\n`/reroll` — Reroll giveaway winners\n\nUse the Giveaway ID shown in the giveaway embed.'},
+    timer: {title:'<:Timer:1564649373025959957> Timer', body:'Event timer commands are not currently available in this build.'},
+    moderation: {title:'<:Moderation:1564649370169905282> Moderation', body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`\n\nRequires the appropriate Discord permissions.'},
+    poll: {title:'<:Poll:1564649357871947956> Polls', body:'`/poll` — Create a poll in your server.'},
+    utility: {title:'<:Utility:1564649360858550323> Utilities', body:'`/ping` · `/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/remind`\n`/balance` · `/daily` · `/work` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory`\nFun: `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship`'},
+    contact: {title:'<:Contact:1564649364050415686> Contact', body:'Need help with Chilly? Contact the bot/server staff for support.'}
+   };
+   const page=pages[i.values[0]]||pages.index;
+   return i.update({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(page.title).setDescription(page.body).setFooter({text:'Playing Powered by Spidyyy'})]});
+  }
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
@@ -319,9 +334,20 @@ client.on('interactionCreate', async i=>{
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
   }
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
-  if(c==='help') return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Commands')
-   .setDescription('**Moderation:** /warn /warnings /clear /timeout /untimeout /kick /ban /unban\n**Admin:** /say /money (server owner only)\n**Economy:** /balance /daily /work /give /leaderboard /shop /buy /inventory\n**Fun:** /8ball /coinflip /dice /rps /joke /ship\n**Utility:** /avatar /userinfo /serverinfo /poll /calculator /remind\n**Giveaways:** /giveaway /giveaway-end /reroll\n**Security & Logs:** /setlogs /security')
-   .setFooter({text:'Playing Powered by Spidyyy'})]});
+  if(c==='help') {
+   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Select a category...').addOptions(
+    {label:'Index',description:'The help page showing how to use the bot',value:'index',emoji:'<:Index:1564649376138399805>'},
+    {label:'Invite logging',description:'Shows information about invite tracking',value:'invite',emoji:'<:Invite:1564649286476505298>'},
+    {label:'Messages',description:'Shows information about message counting',value:'messages',emoji:'<:Message:1564649367120642188>'},
+    {label:'Giveaways',description:'Shows information about giveaway features',value:'giveaways',emoji:'<:Bluegift:1564349870385406062>'},
+    {label:'Moderation',description:'Shows information about moderation features',value:'moderation',emoji:'<:Moderation:1564649370169905282>'},
+    {label:'Timer',description:'Shows information about event timers',value:'timer',emoji:'<:Timer:1564649373025959957>'},
+    {label:'Polls',description:'Shows information about polls',value:'poll',emoji:'<:Poll:1564649357871947956>'},
+    {label:'Utilities',description:'Shows information about utility commands',value:'utility',emoji:'<:Utility:1564649360858550323>'},
+    {label:'Contact',description:'Contact staff if you need support',value:'contact',emoji:'<:Contact:1564649364050415686>'}
+   );
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Help').setDescription('Choose a category below to explore Chilly commands and features.').setFooter({text:'Playing Powered by Spidyyy'})],components:[new ActionRowBuilder().addComponents(menu)]});
+  }
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
