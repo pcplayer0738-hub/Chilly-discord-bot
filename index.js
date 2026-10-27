@@ -701,11 +701,19 @@ client.on('messageCreate', async message => {
   if(target.bot) return message.reply('❌ You cannot send the advertisement to a bot account.').catch(()=>{});
   const ad = new EmbedBuilder()
    .setColor(0xF1B735)
-   .setDescription(`Hey ${message.author}, I am **Chilly**, a multipurpose Discord bot.
+   .setDescription(`Hey <@1312960418288898062>, I am **Chilly**, a multipurpose Discord bot.
 
-You have just added me to **${message.guild.name}** to enjoy moderation, giveaways, economy, utility and more. To get started, invite Chilly to your server and use **/help** to explore the available commands.
 
-**~ Powered by Spidyyy**`)
+You have just added me to **𓂃𐙚 Coffee & Chill™ | Gwys • Fun • Social • Community • Chill** to enjoy moderation, giveaways, economy, utility and more.
+
+
+To get started, invite Chilly to your server and use **/help** to explore the available commands.
+
+
+🌐 **Support Server:** https://discord.gg/zFMWXFC25R
+
+
+~ Powered by Spidyyy`)
    .setFooter({text:'Chilly • Powered by Spidyyy'});
   try {
    await target.send({embeds:[ad]});
