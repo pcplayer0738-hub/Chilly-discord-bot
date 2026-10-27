@@ -229,29 +229,31 @@ function auditEmbed(title, color, fields) {
 
 // Shared Chilly moderation embed style. Custom emoji IDs are from the user's server.
 const CHILLY_EMOJI = {
- member: '<:member:1564341313296539709>',
- moderator: '<:wtick:1564341377368596650>',
- dot: '<:bdot:1564342958931574864>',
- inbox: '<:inboxmail:1421444209021419601>',
- success: '<:Tick:1421447669288800298>',
- arrow: '<a:ARROW:1257263292456370236>',
- gift: '<:gift:1564343034370326660>',
- animatedGift: '<a:3899gift:1522045093685760011>'
+ dm: '<:Dm:1564590774027558993>',
+ arrow: '<:Arrow:1564590038396833812>',
+ moderator: '<:Moderator:1564349904229244968>',
+ member: '<:Members:1564349878472015984>',
+ dot: '<:Bluebot:1564349873363361892>',
+ gift: '<:Bluegift:1564349870385406062>',
+ success: '<:Whitetick:1564349880766304456>',
+ rejected: '<:Rejected:1564349876068688032>',
+ admin: '<:Admin:1564349896402669708>',
+ bot: '<:Bot:1564349898709540974>'
 };
 function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
+ const lines = [
+  `${CHILLY_EMOJI.member} **${targetLabel}:** ${targetName}${targetId ? ` (\`${targetId}\`)` : ''}`,
+  `${CHILLY_EMOJI.moderator} **Moderator:** ${moderator}`
+ ];
+ if (duration) lines.push('', `${CHILLY_EMOJI.dot} **Duration:** ${duration}`);
+ if (dmDone !== undefined) lines.push('', `${CHILLY_EMOJI.dm} **DM Done?** ${dmDone ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected}`);
+ lines.push('', `${CHILLY_EMOJI.arrow} **Reason:** ${reason || 'No reason provided'}`);
  const embed = new EmbedBuilder()
   .setColor(0x36CFC7)
   .setTitle(title)
-  .setDescription(`${CHILLY_EMOJI.member} **${targetLabel}:** ${targetName}${targetId ? ` (\`${targetId}\`)` : ''}
-${CHILLY_EMOJI.moderator} **Moderator:** ${moderator}`)
-  .setFooter({text:'Chilly Moderation'})
-  .setTimestamp();
+  .setDescription(lines.join('\n'))
+  .setFooter({text:'Chilly Moderation'});
  if (avatar) embed.setThumbnail(avatar);
- const fields=[];
- if (duration) fields.push({name:`${CHILLY_EMOJI.dot} Duration`,value:duration,inline:false});
- if (dmDone !== undefined) fields.push({name:`${CHILLY_EMOJI.inbox} DM Done?`,value:dmDone ? CHILLY_EMOJI.success : '❌ Failed / unavailable',inline:false});
- fields.push({name:`${CHILLY_EMOJI.arrow} Reason`,value:(reason || 'No reason provided').slice(0,1024),inline:false});
- embed.addFields(fields);
  return embed;
 }
 const recentMessages = new Map();
@@ -490,8 +492,8 @@ client.on('interactionCreate', async i=>{
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
    const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} New Giveaway ${CHILLY_EMOJI.gift}`)
-    .setDescription(`${CHILLY_EMOJI.animatedGift} **${prize}**\n\n${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R>\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>`)
-    .setFooter({text:`Ends at`}).setTimestamp(new Date(ends*1000));
+    .setDescription(`${CHILLY_EMOJI.gift} **${prize}** ${CHILLY_EMOJI.gift}\n\n${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n\n${CHILLY_EMOJI.dot} React with 🎉 to participate!\n${CHILLY_EMOJI.dot} Discover new events and giveaways.`)
+    .setFooter({text:'Ends at'}).setTimestamp(new Date(ends*1000));
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
    const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
