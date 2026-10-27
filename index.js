@@ -231,7 +231,7 @@ function auditEmbed(title, color, fields) {
 const CHILLY_EMOJI = {
  dm: '<:Dm:1564590774027558993>',
  arrow: '<:Arrow:1564590038396833812>',
- moderator: '<:Moderator:1564349904229244968>',
+ moderator: '<:Admin:1564349896402669708>',
  member: '<:Members:1564349878472015984>',
  dot: '<:Bluebot:1564349873363361892>',
  gift: '<:Bluegift:1564349870385406062>',
@@ -283,6 +283,17 @@ client.on('interactionCreate', async i=>{
    const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
    if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
    const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
+   if(r.changes && g.message) {
+    const count=db.prepare('SELECT COUNT(*) AS n FROM entries WHERE giveaway=?').get(id).n;
+    const ch=await client.channels.fetch(g.channel).catch(()=>null);
+    const m=ch?await ch.messages.fetch(g.message).catch(()=>null):null;
+    if(m&&m.embeds[0]) {
+     const old=m.embeds[0];
+     const description=(old.description||'').replace(/(\*\*Participants:\*\* )\d+/, '$1'+count);
+     const updated=EmbedBuilder.from(old).setDescription(description);
+     await m.edit({embeds:[updated],components:m.components}).catch(()=>{});
+    }
+   }
    return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
   if(!i.isChatInputCommand()) return;
@@ -491,8 +502,8 @@ client.on('interactionCreate', async i=>{
    const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
-   const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} New Giveaway ${CHILLY_EMOJI.gift}`)
-    .setDescription(`${CHILLY_EMOJI.gift} **${prize}** ${CHILLY_EMOJI.gift}\n\n${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n\n${CHILLY_EMOJI.dot} React with 🎉 to participate!\n${CHILLY_EMOJI.dot} Discover new events and giveaways.`)
+   const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} ${prize} ${CHILLY_EMOJI.gift}`)
+    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\``)
     .setFooter({text:'Ends at'}).setTimestamp(new Date(ends*1000));
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
    const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
