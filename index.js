@@ -689,6 +689,153 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+
+ // !setup: create the STAR CITY INDIA-style channel structure.
+ // Only Spidyyy (the configured ID below) can run this command.
+ if(message.content.trim().toLowerCase() === '!setup') {
+  const SETUP_USER_ID = '1312960418288898062';
+  if(message.author.id !== SETUP_USER_ID) {
+   return message.reply('❌ Only Spidyyy can use `!setup`.').catch(()=>{});
+  }
+  if(!message.guild) {
+   return message.reply('❌ Use `!setup` inside your Discord server.').catch(()=>{});
+  }
+  const botMember = message.guild.members.me;
+  if(!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+   return message.reply('❌ I need the **Manage Channels** permission to create the categories and channels.').catch(()=>{});
+  }
+
+  const layout = [
+   {
+    category: '🚫｜CM & Responsible',
+    channels: [
+     {name:'⚠️｜admin-warning', type:ChannelType.GuildText}
+    ]
+   },
+   {
+    category: '🔒》「 MANAGEMENT • STAFF 」',
+    channels: [
+     {name:'📢｜all-admin-announcement', type:ChannelType.GuildText},
+     {name:'📕｜admin-rules', type:ChannelType.GuildText},
+     {name:'📢｜game-news-admin', type:ChannelType.GuildText},
+     {name:'🗂️｜important-guideline', type:ChannelType.GuildText},
+     {name:'📋｜staff-info', type:ChannelType.GuildText},
+     {name:'💬｜all-admin-chat', type:ChannelType.GuildText},
+     {name:'✹｜administrator-chat', type:ChannelType.GuildText},
+     {name:'📋｜penalty-list', type:ChannelType.GuildText},
+     {name:'🤖｜bot-command', type:ChannelType.GuildText},
+     {name:'📚｜daily-attendence', type:ChannelType.GuildText},
+     {name:'📚｜admin-training-report', type:ChannelType.GuildText},
+     {name:'📚｜interview-report', type:ChannelType.GuildText},
+     {name:'📚｜offline-announcement', type:ChannelType.GuildText},
+     {name:'🔊｜Admin Training Voice', type:ChannelType.GuildVoice},
+     {name:'🔊｜Admin-meeting', type:ChannelType.GuildVoice}
+    ]
+   },
+   {
+    category: '└─────➤「 IN-GAME ACTIONS 」',
+    channels: [
+     {name:'🔒📚-»ban-requests«', type:ChannelType.GuildText},
+     {name:'🔒🔴-»bank«', type:ChannelType.GuildText},
+     {name:'🔒📖-»evidence«', type:ChannelType.GuildText},
+     {name:'🔒📄-»unbank«', type:ChannelType.GuildText},
+     {name:'🔒🔴-»perma-ban-request«', type:ChannelType.GuildText}
+    ]
+   },
+   {
+    category: '└─────➤「 DISCORD ACTIONS... 」',
+    channels: [
+     {name:'🔒⚠️-»penalty-list«', type:ChannelType.GuildText},
+     {name:'🔒⚫-»blacklist«', type:ChannelType.GuildText},
+     {name:'🔒🔴-»perma-ban-request«', type:ChannelType.GuildText},
+     {name:'🔒🚫-»perma-ban-discord«', type:ChannelType.GuildText},
+     {name:'🔒💻-»perma-device-ban«', type:ChannelType.GuildText}
+    ]
+   },
+   {
+    category: '🎉｜WELCOME PAGE',
+    channels: [
+     {name:'🎊｜WELCOME', type:ChannelType.GuildText}
+    ]
+   },
+   {category:'🛟｜SUPPORT-LINE', channels:[]},
+   {category:'📚｜RULES', channels:[]},
+   {category:'ℹ️｜INFORMATION ZONE', channels:[]},
+   {
+    category: '🌟｜GENERAL ZONE',
+    channels: [
+     {name:'🎉｜event', type:ChannelType.GuildText},
+     {name:'💬｜chat', type:ChannelType.GuildText},
+     {name:'📸｜media', type:ChannelType.GuildText},
+     {name:'😂｜funny-moments', type:ChannelType.GuildText},
+     {name:'📖｜rp-character-story', type:ChannelType.GuildText},
+     {name:'🔊｜Admin Voice', type:ChannelType.GuildVoice},
+     {name:'🔊｜India-Voice-1', type:ChannelType.GuildVoice},
+     {name:'🔊｜India-Voice-2', type:ChannelType.GuildVoice},
+     {name:'🎵｜Music-Room', type:ChannelType.GuildVoice}
+    ]
+   },
+   {category:'👑｜FACTION-LEADERS', channels:[]},
+   {
+    category: '🎤｜INTERVIEW-ROOM',
+    channels: [
+     {name:'📢｜interview-announcement', type:ChannelType.GuildText},
+     {name:'💬｜interview-chat', type:ChannelType.GuildText},
+     {name:'⏳｜waiting-room-1', type:ChannelType.GuildVoice},
+     {name:'⏳｜waiting-room-2', type:ChannelType.GuildVoice},
+     {name:'🎤｜interview-room', type:ChannelType.GuildVoice}
+    ]
+   }
+  ];
+
+  await message.reply('⏳ Starting server setup. I will create missing categories and channels without deleting anything...').catch(()=>{});
+  let categoriesCreated = 0, channelsCreated = 0, skipped = 0;
+  try {
+   for(const group of layout) {
+    let category = message.guild.channels.cache.find(ch =>
+     ch.type === ChannelType.GuildCategory && ch.name === group.category
+    );
+    if(!category) {
+     category = await message.guild.channels.create({
+      name: group.category,
+      type: ChannelType.GuildCategory,
+      reason: 'Spidyyy requested server setup with !setup'
+     });
+     categoriesCreated++;
+    }
+    for(const item of group.channels) {
+     const exists = message.guild.channels.cache.find(ch =>
+      ch.parentId === category.id && ch.name === item.name && ch.type === item.type
+     );
+     if(exists) {
+      skipped++;
+      continue;
+     }
+     await message.guild.channels.create({
+      name: item.name,
+      type: item.type,
+      parent: category.id,
+      reason: 'Spidyyy requested server setup with !setup'
+     });
+     channelsCreated++;
+    }
+   }
+   return message.channel.send(
+    '✅ **Server setup complete!**\n' +
+    '📂 Categories created: **'+categoriesCreated+'**\n' +
+    '📝 Channels created: **'+channelsCreated+'**\n' +
+    '⏭️ Already existed: **'+skipped+'**\n' +
+    'Nothing existing was deleted.'
+   ).catch(()=>{});
+  } catch(e) {
+   console.error('!setup error:', e);
+   return message.channel.send(
+    '⚠️ Setup stopped because of an error. Created so far: **'+categoriesCreated+
+    '** categories and **'+channelsCreated+'** channels. Check my Manage Channels permission and hosting logs.'
+   ).catch(()=>{});
+  }
+ }
+
  // Owner-only .dm command: sends the bot advertisement to one explicitly selected user.
  if(message.content.trim().toLowerCase().startsWith('.dm')) {
   if(message.author.id !== '1312960418288898062') {
