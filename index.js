@@ -295,9 +295,18 @@ client.once('ready', async()=>{
   status:'online'
  });
  try {
+  // Register commands directly to every server the bot is currently in.
+  // Guild-scoped commands appear much faster than global commands.
+  const guilds = [...client.guilds.cache.values()];
+  if (!guilds.length) console.warn('Bot is not in any cached guild; cannot register guild slash commands.');
+  for (const guild of guilds) {
+   await guild.commands.set(commands);
+   console.log(`Registered ${commands.length} guild slash commands in ${guild.name} (${guild.id}).`);
+  }
+  // Also keep global commands available as a fallback for servers not currently cached.
   await new REST({version:'10'}).setToken(TOKEN)
    .put(Routes.applicationCommands(CLIENT_ID),{body:commands});
-  console.log('Registered '+commands.length+' slash commands.');
+  console.log('Registered '+commands.length+' global slash commands.');
  } catch(e) { console.error('Command registration failed:',e); }
  for(const g of db.prepare('SELECT id,ends FROM giveaways WHERE ended=0').all()) {
   setTimeout(()=>endGiveaway(g.id).catch(console.error),Math.max(0,g.ends*1000-Date.now()));
