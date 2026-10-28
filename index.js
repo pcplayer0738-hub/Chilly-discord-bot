@@ -690,150 +690,162 @@ client.on('guildMemberAdd', async member => {
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
 
- // !setup: create the STAR CITY INDIA-style channel structure.
- // Only Spidyyy (the configured ID below) can run this command.
- if(message.content.trim().toLowerCase() === '!setup') {
-  const SETUP_USER_ID = '1312960418288898062';
-  if(message.author.id !== SETUP_USER_ID) {
-   return message.reply('❌ Only Spidyyy can use `!setup`.').catch(()=>{});
-  }
-  if(!message.guild) {
-   return message.reply('❌ Use `!setup` inside your Discord server.').catch(()=>{});
-  }
+ // !setup: create the Horizons RP: Worldwide channel structure.
+ const setupUserId = '1312960418288898062';
+ const isServerManager = message.guild && (message.author.id === message.guild.ownerId || message.author.id === setupUserId);
+
+ if (message.content.trim().toLowerCase() === '!setup') {
+  if (!message.guild) return message.reply('❌ Use `!setup` inside your Discord server.').catch(()=>{});
+  if (!isServerManager) return message.reply('❌ Only the server owner or bot owner can use `!setup`.').catch(()=>{});
   const botMember = message.guild.members.me;
-  if(!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
-   return message.reply('❌ I need the **Manage Channels** permission to create the categories and channels.').catch(()=>{});
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+   return message.reply('❌ I need the **Manage Channels** permission to create categories and channels.').catch(()=>{});
   }
 
+  // Categories and channels transcribed from the provided screenshots.
+  // Announcement channels fall back to regular text channels if Community is not enabled.
   const layout = [
-   {
-    category: '🚫｜CM & Responsible',
-    channels: [
-     {name:'⚠️｜admin-warning', type:ChannelType.GuildText}
-    ]
-   },
-   {
-    category: '🔒》「 MANAGEMENT • STAFF 」',
-    channels: [
-     {name:'📢｜all-admin-announcement', type:ChannelType.GuildText},
-     {name:'📕｜admin-rules', type:ChannelType.GuildText},
-     {name:'📢｜game-news-admin', type:ChannelType.GuildText},
-     {name:'🗂️｜important-guideline', type:ChannelType.GuildText},
-     {name:'📋｜staff-info', type:ChannelType.GuildText},
-     {name:'💬｜all-admin-chat', type:ChannelType.GuildText},
-     {name:'✹｜administrator-chat', type:ChannelType.GuildText},
-     {name:'📋｜penalty-list', type:ChannelType.GuildText},
-     {name:'🤖｜bot-command', type:ChannelType.GuildText},
-     {name:'📚｜daily-attendence', type:ChannelType.GuildText},
-     {name:'📚｜admin-training-report', type:ChannelType.GuildText},
-     {name:'📚｜interview-report', type:ChannelType.GuildText},
-     {name:'📚｜offline-announcement', type:ChannelType.GuildText},
-     {name:'🔊｜Admin Training Voice', type:ChannelType.GuildVoice},
-     {name:'🔊｜Admin-meeting', type:ChannelType.GuildVoice}
-    ]
-   },
-   {
-    category: '└─────➤「 IN-GAME ACTIONS 」',
-    channels: [
-     {name:'🔒📚-»ban-requests«', type:ChannelType.GuildText},
-     {name:'🔒🔴-»bank«', type:ChannelType.GuildText},
-     {name:'🔒📖-»evidence«', type:ChannelType.GuildText},
-     {name:'🔒📄-»unbank«', type:ChannelType.GuildText},
-     {name:'🔒🔴-»perma-ban-request«', type:ChannelType.GuildText}
-    ]
-   },
-   {
-    category: '└─────➤「 DISCORD ACTIONS... 」',
-    channels: [
-     {name:'🔒⚠️-»penalty-list«', type:ChannelType.GuildText},
-     {name:'🔒⚫-»blacklist«', type:ChannelType.GuildText},
-     {name:'🔒🔴-»perma-ban-request«', type:ChannelType.GuildText},
-     {name:'🔒🚫-»perma-ban-discord«', type:ChannelType.GuildText},
-     {name:'🔒💻-»perma-device-ban«', type:ChannelType.GuildText}
-    ]
-   },
-   {
-    category: '🎉｜WELCOME PAGE',
-    channels: [
-     {name:'🎊｜WELCOME', type:ChannelType.GuildText}
-    ]
-   },
-   {category:'🛟｜SUPPORT-LINE', channels:[]},
-   {category:'📚｜RULES', channels:[]},
-   {category:'ℹ️｜INFORMATION ZONE', channels:[]},
-   {
-    category: '🌟｜GENERAL ZONE',
-    channels: [
-     {name:'🎉｜event', type:ChannelType.GuildText},
-     {name:'💬｜chat', type:ChannelType.GuildText},
-     {name:'📸｜media', type:ChannelType.GuildText},
-     {name:'😂｜funny-moments', type:ChannelType.GuildText},
-     {name:'📖｜rp-character-story', type:ChannelType.GuildText},
-     {name:'🔊｜Admin Voice', type:ChannelType.GuildVoice},
-     {name:'🔊｜India-Voice-1', type:ChannelType.GuildVoice},
-     {name:'🔊｜India-Voice-2', type:ChannelType.GuildVoice},
-     {name:'🎵｜Music-Room', type:ChannelType.GuildVoice}
-    ]
-   },
-   {category:'👑｜FACTION-LEADERS', channels:[]},
-   {
-    category: '🎤｜INTERVIEW-ROOM',
-    channels: [
-     {name:'📢｜interview-announcement', type:ChannelType.GuildText},
-     {name:'💬｜interview-chat', type:ChannelType.GuildText},
-     {name:'⏳｜waiting-room-1', type:ChannelType.GuildVoice},
-     {name:'⏳｜waiting-room-2', type:ChannelType.GuildVoice},
-     {name:'🎤｜interview-room', type:ChannelType.GuildVoice}
-    ]
-   }
+   { category: '🔒｜ADMIN MANAGEMENT', channels: [
+    {name:'🔒｜administrator', type:ChannelType.GuildText},
+    {name:'🖼️｜server-picture', type:ChannelType.GuildText},
+    {name:'📢｜admin-voice-high-rank', type:ChannelType.GuildVoice}
+   ]},
+   { category: '🛠️｜SERVER MANAGEMENT', channels: [
+    {name:'📢｜administrator-announcement', type:ChannelType.GuildAnnouncement},
+    {name:'📢｜game-news-admin', type:ChannelType.GuildAnnouncement},
+    {name:'📢｜staff-update', type:ChannelType.GuildAnnouncement},
+    {name:'📋｜staff-infos', type:ChannelType.GuildText},
+    {name:'📚｜important-guideline', type:ChannelType.GuildText},
+    {name:'💬｜team-chat', type:ChannelType.GuildText},
+    {name:'🟢｜helper-chat', type:ChannelType.GuildText},
+    {name:'📕｜penalty-list', type:ChannelType.GuildText},
+    {name:'⛔｜player-report', type:ChannelType.GuildText},
+    {name:'📝｜offline-announcement', type:ChannelType.GuildText},
+    {name:'⚠️｜admin-warning', type:ChannelType.GuildText},
+    {name:'🤖｜bot-command', type:ChannelType.GuildText},
+    {name:'🛡️｜head-of-factions', type:ChannelType.GuildText},
+    {name:'💳｜staff-salary', type:ChannelType.GuildText}
+   ]},
+   { category: '🛟｜SUPPORT LINE', channels: [
+    {name:'🌟｜suggested-idea', type:ChannelType.GuildText},
+    {name:'📩｜ticket-support', type:ChannelType.GuildText},
+    {name:'🐞｜report-bugs', type:ChannelType.GuildText}
+   ]},
+   { category: '📚｜RULES', channels: [
+    {name:'🗃️｜general-terms-of-use', type:ChannelType.GuildText},
+    {name:'📚｜server-rules', type:ChannelType.GuildText},
+    {name:'📜｜game-rules', type:ChannelType.GuildText},
+    {name:'📁｜factions-rules', type:ChannelType.GuildText}
+   ]},
+   { category: 'ℹ️｜INFORMATION ZONE', channels: [
+    {name:'🔔｜announcement', type:ChannelType.GuildAnnouncement},
+    {name:'🎉｜event', type:ChannelType.GuildAnnouncement},
+    {name:'🎮｜game-news', type:ChannelType.GuildAnnouncement},
+    {name:'🎮｜youtube-channel', type:ChannelType.GuildAnnouncement},
+    {name:'🌟｜influencer-update', type:ChannelType.GuildAnnouncement},
+    {name:'📜｜influencer-form', type:ChannelType.GuildAnnouncement},
+    {name:'📚｜official-media-accounts', type:ChannelType.GuildAnnouncement},
+    {name:'📚｜official-servers', type:ChannelType.GuildAnnouncement},
+    {name:'🔔｜faction-announcement', type:ChannelType.GuildAnnouncement},
+    {name:'⚙️｜server-update', type:ChannelType.GuildAnnouncement}
+   ]},
+   { category: '👑｜VIP ZONE', channels: [
+    {name:'👑｜VIP-Announcement', type:ChannelType.GuildAnnouncement},
+    {name:'🎁｜VIP-Gift', type:ChannelType.GuildAnnouncement},
+    {name:'💬｜VIP-Chat', type:ChannelType.GuildText},
+    {name:'📸｜VIP-Media', type:ChannelType.GuildText},
+    {name:'👑｜Vip-Game-Testing', type:ChannelType.GuildText},
+    {name:'🎧｜VIP-Support-Voice', type:ChannelType.GuildVoice},
+    {name:'📢｜VIP-Voice-1', type:ChannelType.GuildVoice},
+    {name:'📢｜VIP-Voice-2', type:ChannelType.GuildVoice}
+   ]},
+   { category: '🏛️｜CITIZEN CORNER', channels: [
+    {name:'🌐｜global-chat', type:ChannelType.GuildText},
+    {name:'📸｜global-media', type:ChannelType.GuildText},
+    {name:'🎥｜influencer-video', type:ChannelType.GuildText},
+    {name:'📢｜Global Voice 1', type:ChannelType.GuildVoice},
+    {name:'📢｜Global Voice 2', type:ChannelType.GuildVoice},
+    {name:'🎵｜Music Voice', type:ChannelType.GuildVoice},
+    {name:'🌟｜Influencer Voice', type:ChannelType.GuildVoice},
+    {name:'🌟｜Admin Free Time', type:ChannelType.GuildVoice},
+    {name:'🌟｜Admin Free Time 2', type:ChannelType.GuildVoice},
+    {name:'📢｜Admin Meeting', type:ChannelType.GuildVoice},
+    {name:'📢｜Admin Meeting 2', type:ChannelType.GuildVoice}
+   ]},
+   { category: '🌍｜ASIAN ZONE', channels: [
+    {name:'📸｜asia-media', type:ChannelType.GuildText},
+    {name:'😂｜asia-fun', type:ChannelType.GuildText},
+    {name:'🎤｜Asia-Voice-1', type:ChannelType.GuildVoice},
+    {name:'🎤｜Asia-Voice-2', type:ChannelType.GuildVoice},
+    {name:'🎤｜Asia-Voice-3', type:ChannelType.GuildVoice}
+   ]},
+   { category: '🌍｜EUROPEAN ZONE', channels: [
+    {name:'🎤｜Europe-Voice-1', type:ChannelType.GuildVoice}
+   ]},
+   { category: '🌍｜MIDDLE EAST ZONE', channels: [
+    {name:'📸｜middle-east-media', type:ChannelType.GuildText},
+    {name:'😂｜middle-east-fun', type:ChannelType.GuildText}
+   ]},
+   { category: '🎙️｜INTERVIEW ZONE', channels: [
+    {name:'🚨｜interview-announcement', type:ChannelType.GuildAnnouncement},
+    {name:'📝｜chat', type:ChannelType.GuildText},
+    {name:'📋｜project-rules', type:ChannelType.GuildText},
+    {name:'⏳｜Waiting-Room-1', type:ChannelType.GuildVoice},
+    {name:'⏳｜Waiting-Room-2', type:ChannelType.GuildVoice},
+    {name:'🎤｜Interview-Room', type:ChannelType.GuildVoice}
+   ]}
   ];
 
-  await message.reply('⏳ Starting server setup. I will create missing categories and channels without deleting anything...').catch(()=>{});
-  let categoriesCreated = 0, channelsCreated = 0, skipped = 0;
+  await message.reply('⏳ Setting up **Horizons RP: Worldwide**. Existing channels will not be deleted.').catch(()=>{});
+  let categoriesCreated = 0, channelsCreated = 0, skipped = 0, announcementFallbacks = 0;
   try {
-   for(const group of layout) {
-    let category = message.guild.channels.cache.find(ch =>
-     ch.type === ChannelType.GuildCategory && ch.name === group.category
-    );
-    if(!category) {
-     category = await message.guild.channels.create({
-      name: group.category,
-      type: ChannelType.GuildCategory,
-      reason: 'Spidyyy requested server setup with !setup'
-     });
+   for (const group of layout) {
+    let category = message.guild.channels.cache.find(ch => ch.type === ChannelType.GuildCategory && ch.name === group.category);
+    if (!category) {
+     category = await message.guild.channels.create({name:group.category, type:ChannelType.GuildCategory, reason:'Horizons RP: Worldwide server setup'});
      categoriesCreated++;
     }
-    for(const item of group.channels) {
-     const exists = message.guild.channels.cache.find(ch =>
-      ch.parentId === category.id && ch.name === item.name && ch.type === item.type
-     );
-     if(exists) {
-      skipped++;
-      continue;
+    for (const item of group.channels) {
+     const exists = message.guild.channels.cache.find(ch => ch.parentId === category.id && ch.name === item.name && (ch.type === item.type || (item.type === ChannelType.GuildAnnouncement && ch.type === ChannelType.GuildText)));
+     if (exists) { skipped++; continue; }
+     const options = {name:item.name, type:item.type, parent:category.id, reason:'Horizons RP: Worldwide server setup'};
+     try {
+      await message.guild.channels.create(options);
+     } catch (err) {
+      if (item.type !== ChannelType.GuildAnnouncement) throw err;
+      await message.guild.channels.create({...options, type:ChannelType.GuildText});
+      announcementFallbacks++;
      }
-     await message.guild.channels.create({
-      name: item.name,
-      type: item.type,
-      parent: category.id,
-      reason: 'Spidyyy requested server setup with !setup'
-     });
      channelsCreated++;
     }
    }
-   return message.channel.send(
-    '✅ **Server setup complete!**\n' +
-    '📂 Categories created: **'+categoriesCreated+'**\n' +
-    '📝 Channels created: **'+channelsCreated+'**\n' +
-    '⏭️ Already existed: **'+skipped+'**\n' +
-    'Nothing existing was deleted.'
-   ).catch(()=>{});
-  } catch(e) {
+   return message.channel.send('✅ **Horizons RP: Worldwide setup complete!**\n📂 Categories created: **'+categoriesCreated+'**\n📝 Channels created: **'+channelsCreated+'**\n⏭️ Already existed: **'+skipped+'**'+(announcementFallbacks?'\nℹ️ Announcement channels created as text channels (Community may not be enabled): **'+announcementFallbacks+'**':'')+'\nNothing existing was deleted.').catch(()=>{});
+  } catch (e) {
    console.error('!setup error:', e);
-   return message.channel.send(
-    '⚠️ Setup stopped because of an error. Created so far: **'+categoriesCreated+
-    '** categories and **'+channelsCreated+'** channels. Check my Manage Channels permission and hosting logs.'
-   ).catch(()=>{});
+   return message.channel.send('⚠️ Setup stopped because of an error. Created so far: **'+categoriesCreated+'** categories and **'+channelsCreated+'** channels. Error: `'+String(e.message || e).slice(0,300)+'`. Check Manage Channels permission and server settings.').catch(()=>{});
   }
+ }
+
+ // !dltall is intentionally two-step because it permanently deletes channels.
+ if (message.content.trim().toLowerCase() === '!dltall') {
+  if (!message.guild) return message.reply('❌ Use `!dltall` inside your Discord server.').catch(()=>{});
+  if (!isServerManager) return message.reply('❌ Only the server owner or bot owner can use `!dltall`.').catch(()=>{});
+  return message.reply('⚠️ This will permanently delete **every channel and category** in this server. To confirm, type `!dltall confirm`. Roles and members will not be deleted.').catch(()=>{});
+ }
+ if (message.content.trim().toLowerCase() === '!dltall confirm') {
+  if (!message.guild) return message.reply('❌ Use this command inside your Discord server.').catch(()=>{});
+  if (!isServerManager) return message.reply('❌ Only the server owner or bot owner can use `!dltall confirm`.').catch(()=>{});
+  const botMember = message.guild.members.me;
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return message.reply('❌ I need the **Manage Channels** permission to delete channels.').catch(()=>{});
+  await message.reply('🗑️ Confirmed. Deleting all channels and categories now...').catch(()=>{});
+  let deleted = 0, failed = 0;
+  // Delete non-category channels first, then categories.
+  const channels = [...message.guild.channels.cache.values()].sort((a,b) => (a.type === ChannelType.GuildCategory ? 1 : 0) - (b.type === ChannelType.GuildCategory ? 1 : 0));
+  for (const channel of channels) {
+   try { await channel.delete('Owner confirmed !dltall for Horizons RP: Worldwide'); deleted++; }
+   catch (err) { failed++; console.error('!dltall failed for '+channel.name+':', err.message); }
+  }
+  return message.author.send('🗑️ **Delete-all finished for '+message.guild.name+'.** Deleted: **'+deleted+'** channels/categories. Failed: **'+failed+'**.').catch(()=>{});
  }
 
  // Owner-only .dm command: sends the bot advertisement to one explicitly selected user.
