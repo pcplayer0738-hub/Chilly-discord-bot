@@ -7,6 +7,8 @@ const Database = require('better-sqlite3');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+// Trusted bot owner configured by the user.
+const TRUSTED_OWNER_ID = '1312960418288898062';
 
 if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
@@ -14,6 +16,7 @@ if (!TOKEN || !CLIENT_ID) {
 }
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const db = new Database('chilly.sqlite');
+db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
  guild TEXT, user TEXT, coins INTEGER DEFAULT 0,
@@ -75,9 +78,27 @@ ensureColumn('entries', 'user', 'TEXT');
 const commands = [
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
- new SlashCommandBuilder().setName('say').setDescription('Send a message to a selected channel')
-  .addChannelOption(o=>o.setName('channel').setDescription('Channel to send the message in').addChannelTypes(ChannelType.GuildText).setRequired(true))
-  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true)),
+ new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
+  .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+ new SlashCommandBuilder().setName('whitelist').setDescription('Manage security whitelist entries')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('add_user').setDescription('Add user to whitelist')
+   .addUserOption(o=>o.setName('user').setDescription('User to whitelist').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('add_channel').setDescription('Add channel to whitelist')
+   .addChannelOption(o=>o.setName('channel').setDescription('Channel to whitelist').addChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('add_role').setDescription('Add role to whitelist')
+   .addRoleOption(o=>o.setName('role').setDescription('Role to whitelist').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('remove_channel').setDescription('Remove channel from whitelist')
+   .addChannelOption(o=>o.setName('channel').setDescription('Channel to remove').addChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('remove_role').setDescription('Remove role from whitelist')
+   .addRoleOption(o=>o.setName('role').setDescription('Role to remove').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('remove_user').setDescription('Remove user from whitelist')
+   .addUserOption(o=>o.setName('user').setDescription('User to remove').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('view_channels').setDescription('Show whitelisted channels'))
+  .addSubcommand(sub=>sub.setName('view_roles').setDescription('Show whitelisted roles'))
+  .addSubcommand(sub=>sub.setName('view_users').setDescription('Show whitelisted users')),
  new SlashCommandBuilder().setName('money').setDescription('Add coins to a member (server owner only)')
   .addUserOption(o=>o.setName('user').setDescription('Member receiving coins').setRequired(true))
   .addIntegerOption(o=>o.setName('amount').setDescription('Coins to add').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
@@ -341,13 +362,59 @@ client.on('interactionCreate', async i=>{
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
+  const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
+  const isGuildOwner = g && u.id === g.ownerId;
+  const hasAdminAccess = isTrustedOwner || isGuildOwner || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
+  const moderationPermissions = {
+   warn: PermissionFlagsBits.ModerateMembers,
+   warnings: PermissionFlagsBits.ModerateMembers,
+   clear: PermissionFlagsBits.ManageMessages,
+   timeout: PermissionFlagsBits.ModerateMembers,
+   untimeout: PermissionFlagsBits.ModerateMembers,
+   kick: PermissionFlagsBits.KickMembers,
+   ban: PermissionFlagsBits.BanMembers,
+   unban: PermissionFlagsBits.BanMembers
+  };
+  if(moderationPermissions[c] && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator) && !i.memberPermissions?.has(moderationPermissions[c])) {
+   return i.reply({content:`⛔ You need the appropriate Discord permission to use /${c}.`,ephemeral:true});
+  }
   if(c==='say') {
-   const channel=i.options.getChannel('channel');
+   if(!hasAdminAccess) return i.reply({content:'⛔ /say is limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
+   const channel=i.options.getChannel('channel') || i.channel;
    const message=i.options.getString('message');
-   if(!channel || !channel.isTextBased() || !channel.send) return i.reply({content:'Please select a text channel.',ephemeral:true});
-   if(!channel.permissionsFor(client.user).has('SendMessages')) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
+   if(!channel || !channel.isTextBased() || !channel.send) return i.reply({content:'Please use this command in a text channel or select a text channel.',ephemeral:true});
+   const botMember = g.members.me;
+   if(!botMember || !channel.permissionsFor(botMember)?.has(PermissionFlagsBits.SendMessages)) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
    await channel.send({content:message, allowedMentions:{parse:[]}});
    return i.reply({content:'✅ Message sent in '+channel+'.',ephemeral:true});
+  }
+  if(c==='whitelist') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Whitelist commands are limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   const viewKinds={view_users:'user',view_channels:'channel',view_roles:'role'};
+   if(viewKinds[sub]) {
+    const kind=viewKinds[sub];
+    const rows=db.prepare('SELECT kind,target FROM whitelist WHERE guild=? AND kind=? ORDER BY created ASC').all(g.id,kind);
+    const label={user:'Users',channel:'Channels',role:'Roles'}[kind];
+    const list=rows.map(r=>r.kind==='user'?`<@${r.target}> — \`${r.target}\``:r.kind==='role'?`<@&${r.target}> — \`${r.target}\``:`<#${r.target}> — \`${r.target}\``);
+    return i.reply({content:`**Whitelist • ${label}**\\n${list.length?list.join('\\n').slice(0,1850):'No entries yet.'}`,ephemeral:true});
+   }
+   const actions={
+    add_user:{kind:'user',action:'add'},add_channel:{kind:'channel',action:'add'},add_role:{kind:'role',action:'add'},
+    remove_user:{kind:'user',action:'remove'},remove_channel:{kind:'channel',action:'remove'},remove_role:{kind:'role',action:'remove'}
+   };
+   const config=actions[sub];
+   if(!config) return i.reply({content:'Unknown whitelist action.',ephemeral:true});
+   let target;
+   if(config.kind==='user') target=i.options.getUser('user',true).id;
+   if(config.kind==='channel') target=i.options.getChannel('channel',true).id;
+   if(config.kind==='role') target=i.options.getRole('role',true).id;
+   if(config.action==='add') {
+    const result=db.prepare('INSERT OR IGNORE INTO whitelist (guild,kind,target,added_by,created) VALUES (?,?,?,?,?)').run(g.id,config.kind,target,u.id,Date.now());
+    return i.reply({content:result.changes?'✅ Added to whitelist.':'ℹ️ This item is already whitelisted.',ephemeral:true});
+   }
+   const result=db.prepare('DELETE FROM whitelist WHERE guild=? AND kind=? AND target=?').run(g.id,config.kind,target);
+   return i.reply({content:result.changes?'✅ Removed from whitelist.':'ℹ️ This item was not in the whitelist.',ephemeral:true});
   }
   if(c==='money') {
    if(u.id!==g.ownerId) return i.reply({content:'⛔ Only the server owner can use /money.',ephemeral:true});
