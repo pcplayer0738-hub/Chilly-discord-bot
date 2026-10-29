@@ -1,1 +1,7 @@
-{"name":"chilly-discord-bot","version":"1.1.0","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"discord.js":"^14.16.3","better-sqlite3":"^11.5.0","dotenv":"^16.4.5"}}
+{
+  "name": "chilly-discord-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "dependencies": { "discord.js": "^14.19.3", "dotenv": "^16.6.1", "better-sqlite3": "^11.8.1" }
+}

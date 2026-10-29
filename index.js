@@ -330,17 +330,20 @@ client.once('ready', async()=>{
   if (!guilds.length) {
    console.error('SLASH COMMAND SYNC FAILED: bot is not in any server cache. Check bot invite and DISCORD_TOKEN.');
   }
+  // Keep commands GLOBAL only. Registering the same commands as both guild and
+  // global commands makes Discord show each command twice in a server.
+  // Clear any guild-scoped copies created by earlier versions, then publish globals.
   for (const guild of guilds) {
    try {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: payload });
-    console.log(`✅ Synced ${payload.length} slash commands to ${guild.name} (${guild.id}).`);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: [] });
+    console.log(`🧹 Cleared old guild-specific slash commands from ${guild.name} (${guild.id}).`);
    } catch (error) {
-    console.error(`❌ Guild slash-command sync failed for ${guild.name} (${guild.id}):`, JSON.stringify(error?.rawError || {message:error?.message, code:error?.code}, null, 2));
+    console.error(`❌ Could not clear guild-specific commands for ${guild.name} (${guild.id}):`, JSON.stringify(error?.rawError || {message:error?.message, code:error?.code}, null, 2));
    }
   }
   try {
    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: payload });
-   console.log(`✅ Synced ${payload.length} global slash commands.`);
+   console.log(`✅ Synced ${payload.length} global slash commands (global commands may take a little time to refresh in Discord).`);
   } catch (error) {
    console.error('❌ Global slash-command sync failed. Full Discord API details:', JSON.stringify(error?.rawError || {message:error?.message, code:error?.code}, null, 2));
   }
