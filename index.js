@@ -256,8 +256,29 @@ async function endGiveaway(id, reroll=false) {
      components:[]
     }).catch(()=>{});
    }
-   await ch.send(winners.length?'🎉 Congratulations '+winners.map(x=>'<@'+x+'>').join(', ')+'! You won **'+g.prize+'**!':'Giveaway ended with no entries.').catch(()=>{});
+   if(winners.length) {
+    await ch.send({
+     content:'🎉 '+CHILLY_EMOJI.gift+' Congratulations '+winners.map(x=>'<@'+x+'>').join(', ')+'! You won **'+g.prize+'**!\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
+     allowedMentions:{users:winners}
+    }).catch(()=>{});
+   } else {
+    await ch.send('Giveaway ended with no entries.').catch(()=>{});
+   }
   }
+ } else {
+  const ch=await client.channels.fetch(g.channel).catch(()=>null);
+  if(ch && winners.length) await ch.send({
+   content:'🎉 '+CHILLY_EMOJI.gift+' New giveaway winner(s): '+winners.map(x=>'<@'+x+'>').join(', ')+'! Prize: **'+g.prize+'**.\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
+   allowedMentions:{users:winners}
+  }).catch(()=>{});
+ }
+ // DM every winner and explicitly mention them in the message.
+ for(const winnerId of winners) {
+  const user=await client.users.fetch(winnerId).catch(()=>null);
+  if(user) await user.send({
+   content:'🎉 You Won the giveaway! <@'+winnerId+'>\n'+CHILLY_EMOJI.gift+' Prize: **'+g.prize+'**\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
+   allowedMentions:{users:[winnerId]}
+  }).catch(()=>{});
  }
  return {winners};
 }
