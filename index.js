@@ -335,14 +335,14 @@ client.once('ready', async()=>{
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: payload });
     console.log(`✅ Synced ${payload.length} slash commands to ${guild.name} (${guild.id}).`);
    } catch (error) {
-    console.error(`❌ Guild slash-command sync failed for ${guild.name} (${guild.id}).`, error?.rawError || error);
+    console.error(`❌ Guild slash-command sync failed for ${guild.name} (${guild.id}):`, JSON.stringify(error?.rawError || {message:error?.message, code:error?.code}, null, 2));
    }
   }
   try {
    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: payload });
    console.log(`✅ Synced ${payload.length} global slash commands.`);
   } catch (error) {
-   console.error('❌ Global slash-command sync failed. Guild commands may still work. Check CLIENT_ID and Discord API validation details:', error?.rawError || error);
+   console.error('❌ Global slash-command sync failed. Full Discord API details:', JSON.stringify(error?.rawError || {message:error?.message, code:error?.code}, null, 2));
   }
  } catch (e) {
   console.error('❌ Slash-command registration failed before sending to Discord:', e);
