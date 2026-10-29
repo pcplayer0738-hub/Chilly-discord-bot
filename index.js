@@ -318,19 +318,34 @@ client.once('ready', async()=>{
   status:'online'
  });
  try {
-  // Register commands directly to every server the bot is currently in.
-  // Guild-scoped commands appear much faster than global commands.
+  const payload = commands.map(command => command.toJSON());
+  const names = payload.map(command => command.name);
+  const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
+  if (duplicates.length) throw new Error('Duplicate slash command names: ' + [...new Set(duplicates)].join(', '));
+  if (payload.length > 100) throw new Error(`Discord allows at most 100 global commands; found ${payload.length}.`);
+
+  const rest = new REST({ version: '10' }).setToken(TOKEN);
   const guilds = [...client.guilds.cache.values()];
-  if (!guilds.length) console.warn('Bot is not in any cached guild; cannot register guild slash commands.');
-  for (const guild of guilds) {
-   await guild.commands.set(commands);
-   console.log(`Registered ${commands.length} guild slash commands in ${guild.name} (${guild.id}).`);
+  if (!guilds.length) {
+   console.error('SLASH COMMAND SYNC FAILED: bot is not in any server cache. Check bot invite and DISCORD_TOKEN.');
   }
-  // Also keep global commands available as a fallback for servers not currently cached.
-  await new REST({version:'10'}).setToken(TOKEN)
-   .put(Routes.applicationCommands(CLIENT_ID),{body:commands});
-  console.log('Registered '+commands.length+' global slash commands.');
- } catch(e) { console.error('Command registration failed:',e); }
+  for (const guild of guilds) {
+   try {
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: payload });
+    console.log(`✅ Synced ${payload.length} slash commands to ${guild.name} (${guild.id}).`);
+   } catch (error) {
+    console.error(`❌ Guild slash-command sync failed for ${guild.name} (${guild.id}).`, error?.rawError || error);
+   }
+  }
+  try {
+   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: payload });
+   console.log(`✅ Synced ${payload.length} global slash commands.`);
+  } catch (error) {
+   console.error('❌ Global slash-command sync failed. Guild commands may still work. Check CLIENT_ID and Discord API validation details:', error?.rawError || error);
+  }
+ } catch (e) {
+  console.error('❌ Slash-command registration failed before sending to Discord:', e);
+ }
  for(const g of db.prepare('SELECT id,ends FROM giveaways WHERE ended=0').all()) {
   setTimeout(()=>endGiveaway(g.id).catch(console.error),Math.max(0,g.ends*1000-Date.now()));
  }
