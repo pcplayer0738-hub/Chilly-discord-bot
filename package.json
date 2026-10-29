@@ -1,17 +1,14 @@
-
 {
   "name": "chilly-discord-bot",
-  "version": "1.0.0",
-  "description": "Chilly - All-in-One Discord Bot",
+  "version": "1.1.0",
+  "description": "Chilly Discord bot with help, tickets, moderation, and server configuration",
   "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": "22.x"
-  },
+  "scripts": {"start": "node index.js"},
+  "engines": {"node": ">=20"},
   "dependencies": {
     "discord.js": "^14.19.3",
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^11.8.1",
+    "@discordjs/voice": "^0.18.0",
+    "play-dl": "^1.9.7"
   }
 }

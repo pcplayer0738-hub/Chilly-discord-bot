@@ -16,6 +16,7 @@ if (!TOKEN || !CLIENT_ID) {
 }
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const db = new Database('chilly.sqlite');
+db.exec(`CREATE TABLE IF NOT EXISTS chilly_config (guild TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(guild,key))`);
 db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -76,14 +77,36 @@ ensureColumn('entries', 'giveaway', 'TEXT');
 ensureColumn('entries', 'user', 'TEXT');
 
 const commands = [
+ new SlashCommandBuilder().setName('ticket-setup').setDescription('Customize the ticket panel for this server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addChannelOption(o=>o.setName('channel').setDescription('Panel channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
+  .addRoleOption(o=>o.setName('support_role').setDescription('Role that can see tickets').setRequired(true))
+  .addStringOption(o=>o.setName('title').setDescription('Panel title').setMaxLength(200).setRequired(true))
+  .addStringOption(o=>o.setName('description').setDescription('Panel description').setMaxLength(1000).setRequired(true)),
+ new SlashCommandBuilder().setName('welcome-setup').setDescription('Configure welcome messages for this server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addChannelOption(o=>o.setName('channel').setDescription('Welcome channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
+  .addStringOption(o=>o.setName('message').setDescription('Use {user} and {server} placeholders').setMaxLength(1000).setRequired(true)),
+ new SlashCommandBuilder().setName('jail-setup').setDescription('Set the jail role for this server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Jail role').setRequired(true)),
+ new SlashCommandBuilder().setName('jail').setDescription('Jail a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member to jail').setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason')),
+ new SlashCommandBuilder().setName('unjail').setDescription('Release a jailed member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member to release').setRequired(true)),
+ new SlashCommandBuilder().setName('play').setDescription('Play audio from a YouTube URL')
+  .addStringOption(o=>o.setName('url').setDescription('YouTube video URL').setRequired(true)),
+ ...['skip','pause','resume','stop','queue','leave'].map(n=>new SlashCommandBuilder().setName(n).setDescription(({skip:'Skip current track',pause:'Pause music',resume:'Resume music',stop:'Stop music and clear queue',queue:'Show music queue',leave:'Leave voice channel'})[n])),
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+ ,
  new SlashCommandBuilder().setName('whitelist').setDescription('Manage security whitelist entries')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addSubcommand(sub=>sub.setName('add_user').setDescription('Add user to whitelist')
    .addUserOption(o=>o.setName('user').setDescription('User to whitelist').setRequired(true)))
   .addSubcommand(sub=>sub.setName('add_channel').setDescription('Add channel to whitelist')
@@ -314,6 +337,23 @@ client.once('ready', async()=>{
 });
 client.on('interactionCreate', async i=>{
  try {
+  if(i.isButton()&&i.customId==='chilly_ticket_open') {
+   const existing=i.guild.channels.cache.find(ch=>ch.type===ChannelType.GuildText && ch.topic===`chilly-ticket:${i.user.id}`);
+   if(existing) return i.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
+   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_role')?.value;
+   const categoryId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_category')?.value;
+   const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}];
+   if(roleId) perms.push({id:roleId,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]});
+   const ch=await i.guild.channels.create({name:`ticket-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}`,parent:categoryId||undefined,permissionOverwrites:perms});
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+   await ch.send({content:`🎫 ${i.user} <@&${roleId||i.guild.id}>`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('Support Ticket').setDescription('Please describe your issue. A staff member will assist you.')],components:[row]});
+   return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
+  }
+  if(i.isButton()&&i.customId==='chilly_ticket_close') {
+   const isOwner=i.guild&&i.user.id===i.guild.ownerId;
+   if(!isOwner&&!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels)&&!i.channel.topic?.includes(`chilly-ticket:${i.user.id}`)) return i.reply({content:'Only the ticket creator or staff can close this ticket.',ephemeral:true});
+   await i.reply({content:'🔒 Closing ticket in 3 seconds…',ephemeral:true}); setTimeout(()=>i.channel.delete('Ticket closed').catch(()=>{}),3000); return;
+  }
   if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
    const [,gameId,choice]=i.customId.split(':'); const game=rpsGames.get(gameId);
    if(!game) return i.reply({content:'This RPS game is no longer active.',ephemeral:true});
@@ -354,18 +394,26 @@ client.on('interactionCreate', async i=>{
   }
   if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
    const pages = {
-    index: {title:'❄️ Chilly Help — Index', body:'Welcome to Chilly! Select a category from the menu to explore the bot commands and features.'},
-    invite: {title:'<:Invite:1564649286476505298> Invite Logging', body:'Invite tracking is not currently available in this build.'},
-    messages: {title:'<:Message:1564649367120642188> Messages', body:'Message-counting commands are not currently available in this build.'},
-    giveaways: {title:'<:Bluegift:1564349870385406062> Giveaways', body:'`/giveaway` — Create a giveaway\n`/giveaway-end` — End a giveaway using its ID\n`/reroll` — Reroll giveaway winners\n\nUse the Giveaway ID shown in the giveaway embed.'},
-    timer: {title:'<:Timer:1564649373025959957> Timer', body:'Event timer commands are not currently available in this build.'},
-    moderation: {title:'<:Moderation:1564649370169905282> Moderation', body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`\n\nRequires the appropriate Discord permissions.'},
-    poll: {title:'<:Poll:1564649357871947956> Polls', body:'`/poll` — Create a poll in your server.'},
-    utility: {title:'<:Utility:1564649360858550323> Utilities', body:'`/ping` · `/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/remind`\n`/balance` · `/daily` · `/work` · `/slots` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/invites` · `/invites-leaderboard`\nText aliases: `Chilly daily`, `Chilly balance`, `Chilly work`, `Chilly slots 100` (also `c daily`, `c bal`, `c work`)\nFun: `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship`'},
-    contact: {title:'<:Contact:1564649364050415686> Contact', body:'Need help with Chilly? Contact the bot/server staff for support.'}
+    aichat:{title:'AI Chat',body:'No AI chat slash command is currently configured in this build.'},
+    antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
+    automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
+    credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
+    giveawaycog:{title:'GiveawayCog',body:'`/giveaway` · `/giveaway-end` · `/reroll`'},
+    jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
+    logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
+    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
+    moderation:{title:'Moderation',body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`. Each command requires its relevant Discord permission.'},
+    np:{title:'NP',body:'No NP commands are currently configured in this build.'},
+    reqrolecog:{title:'ReqRoleCog',body:'Role-request commands are not currently configured in this build.'},
+    reset:{title:'Reset',body:'No reset command is currently configured in this build.'},
+    responders:{title:'Responders',body:'Responder commands are not currently configured in this build.'},
+    tickets:{title:'Tickets',body:'`/ticket-setup` — Customize panel channel, title, description and support role. Use the Create Ticket button to open private tickets.'},
+    utility:{title:'Utility',body:'`/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/invites` · `/invites-leaderboard`'},
+    vchelp:{title:'VC Help',body:'Music commands registered: `/play` · `/skip` · `/pause` · `/resume` · `/stop` · `/queue` · `/leave`. YouTube playback still needs voice provider integration.'},
+    welcomer:{title:'Welcomer',body:'`/welcome-setup` — Set the welcome channel and message. Placeholders: `{user}` and `{server}`.'}
    };
-   const page=pages[i.values[0]]||pages.index;
-   return i.update({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(page.title).setDescription(page.body).setFooter({text:'Playing Powered by Spidyyy'})]});
+   const page=pages[i.values[0]]||pages.misc;
+   return i.update({embeds:[new EmbedBuilder().setColor(0x77DDE7).setAuthor({name:'Chilly • Help Center',iconURL:client.user.displayAvatarURL()}).setTitle('<:F1:1565221539844989060> '+page.title).setDescription('<:Redtick:1565221545453027339> '+page.body).setFooter({text:'Chilly Bot • Select another category below'})]});
   }
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
@@ -435,20 +483,56 @@ client.on('interactionCreate', async i=>{
    const updated=account(g.id,to.id);
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
   }
+  if(c==='ticket-setup') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
+   const ch=i.options.getChannel('channel'), role=i.options.getRole('support_role'), title=i.options.getString('title'), desc=i.options.getString('description');
+   for(const [k,v] of Object.entries({ticket_channel:ch.id,ticket_role:role.id,ticket_title:title,ticket_description:desc})) db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,k,v);
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_open').setLabel('Create Ticket').setEmoji('🎫').setStyle(ButtonStyle.Primary));
+   await ch.send({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(title).setDescription(desc)],components:[row]});
+   return i.reply({content:'✅ Ticket panel saved and posted. Customize it again with /ticket-setup.',ephemeral:true});
+  }
+  if(c==='welcome-setup') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
+   for(const [k,v] of Object.entries({welcome_channel:i.options.getChannel('channel').id,welcome_message:i.options.getString('message')})) db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,k,v);
+   return i.reply({content:'✅ Welcome message configured for this server.',ephemeral:true});
+  }
+  if(c==='jail-setup') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
+   const role=i.options.getRole('role'); db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'jail_role',role.id);
+   return i.reply({content:'✅ Jail role saved. Make sure the bot role is above it.',ephemeral:true});
+  }
+  if(c==='jail'||c==='unjail') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ModerateMembers) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Moderate Members permission required.',ephemeral:true});
+   const user=i.options.getUser('user'), member=await g.members.fetch(user.id).catch(()=>null), roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'jail_role')?.value;
+   if(!member||!roleId) return i.reply({content:'Set a jail role first with /jail-setup.',ephemeral:true});
+   const role=g.roles.cache.get(roleId); if(!role) return i.reply({content:'Saved jail role no longer exists. Run /jail-setup again.',ephemeral:true});
+   if(c==='jail') { await member.roles.add(role, i.options.getString('reason')||'Jailed by moderator'); return i.reply('🔒 '+user.tag+' has been jailed.'); }
+   await member.roles.remove(role,'Released from jail'); return i.reply('🔓 '+user.tag+' has been released.');
+  }
+  if(['play','skip','pause','resume','stop','queue','leave'].includes(c)) return i.reply({content:'🎵 Music playback needs the voice dependencies installed and a compatible YouTube stream provider. This command is registered, but playback is not enabled in this package yet.',ephemeral:true});
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') {
-   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Select a category...').addOptions(
-    {label:'Index',description:'The help page showing how to use the bot',value:'index',emoji:'<:Index:1564649376138399805>'},
-    {label:'Invite logging',description:'Shows information about invite tracking',value:'invite',emoji:'<:Invite:1564649286476505298>'},
-    {label:'Messages',description:'Shows information about message counting',value:'messages',emoji:'<:Message:1564649367120642188>'},
-    {label:'Giveaways',description:'Shows information about giveaway features',value:'giveaways',emoji:'<:Bluegift:1564349870385406062>'},
-    {label:'Moderation',description:'Shows information about moderation features',value:'moderation',emoji:'<:Moderation:1564649370169905282>'},
-    {label:'Timer',description:'Shows information about event timers',value:'timer',emoji:'<:Timer:1564649373025959957>'},
-    {label:'Polls',description:'Shows information about polls',value:'poll',emoji:'<:Poll:1564649357871947956>'},
-    {label:'Utilities',description:'Shows information about utility commands',value:'utility',emoji:'<:Utility:1564649360858550323>'},
-    {label:'Contact',description:'Contact staff if you need support',value:'contact',emoji:'<:Contact:1564649364050415686>'}
+   const red={id:'1565221545453027339',name:'Redtick'};
+   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Select category').addOptions(
+    {label:'aichat',description:'AI chat commands',value:'aichat',emoji:red},
+    {label:'AntiNuke',description:'Security and whitelist tools',value:'antinuke',emoji:red},
+    {label:'Automod',description:'Automatic moderation',value:'automod',emoji:red},
+    {label:'Credits',description:'Chilly Coins and economy',value:'credits',emoji:red},
+    {label:'GiveawayCog',description:'Giveaway tools',value:'giveawaycog',emoji:red},
+    {label:'jail',description:'Jail tools',value:'jail',emoji:red},
+    {label:'Logs',description:'Server logs',value:'logs',emoji:red},
+    {label:'Misc',description:'General and fun commands',value:'misc',emoji:red},
+    {label:'Moderation',description:'Moderation commands',value:'moderation',emoji:red},
+    {label:'np',description:'NP commands',value:'np',emoji:red},
+    {label:'ReqRoleCog',description:'Role requests',value:'reqrolecog',emoji:red},
+    {label:'Reset',description:'Reset tools',value:'reset',emoji:red},
+    {label:'Responders',description:'Automatic responders',value:'responders',emoji:red},
+    {label:'tickets',description:'Ticket tools',value:'tickets',emoji:red},
+    {label:'utility',description:'Utility commands',value:'utility',emoji:red},
+    {label:'vchelp',description:'Voice channel help',value:'vchelp',emoji:red},
+    {label:'Welcomer',description:'Welcome tools',value:'welcomer',emoji:red}
    );
-   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('❄️ Chilly Help').setDescription('Choose a category below to explore Chilly commands and features.').setFooter({text:'Playing Powered by Spidyyy'})],components:[new ActionRowBuilder().addComponents(menu)]});
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setAuthor({name:'Chilly • Help Center',iconURL:client.user.displayAvatarURL()}).setTitle('<:F1:1565221539844989060> Chilly Help').setDescription('Browse all available Chilly commands by category.\n\n<:Redtick:1565221545453027339> **Categories**\nSelect a category below to view its commands.').setFooter({text:'Chilly Bot • Powered by Spidyyy'})],components:[new ActionRowBuilder().addComponents(menu)]});
   }
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
@@ -742,6 +826,9 @@ client.on('guildMemberUpdate', async (oldMember,newMember) => {
   await logAction(newMember.guild,e);
  }
 });
+client.on('guildMemberAdd', async member => {
+ try { const chId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(member.guild.id,'welcome_channel')?.value; const tpl=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(member.guild.id,'welcome_message')?.value; const ch=chId?await member.guild.channels.fetch(chId).catch(()=>null):null; if(ch&&tpl) await ch.send({content:tpl.replaceAll('{user}',`<@${member.id}>`).replaceAll('{server}',member.guild.name),allowedMentions:{users:[member.id]}}); } catch(e) { console.error('Welcome message:',e.message); }
+});
 const inviteCache = new Map();
 const rpsGames = new Map();
 client.on('ready', async () => {
@@ -765,6 +852,14 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+ const rawPrefix=message.content.trim().toLowerCase();
+ if(message.guild && (rawPrefix==='.hide'||rawPrefix==='.unhide')) {
+  const canManage=message.member.permissions.has(PermissionFlagsBits.ManageChannels)||message.member.permissions.has(PermissionFlagsBits.Administrator)||message.author.id===message.guild.ownerId||message.author.id===TRUSTED_OWNER_ID;
+  if(!canManage) return message.reply('⛔ You need **Manage Channels** to use this.').catch(()=>{});
+  const everyone=message.guild.roles.everyone;
+  try { await message.channel.permissionOverwrites.edit(everyone, {ViewChannel:rawPrefix==='.unhide'?true:false}); return message.reply(rawPrefix==='.hide'?'🙈 Channel hidden from @everyone.':'👀 Channel visible to @everyone again.'); }
+  catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
+ }
 
  // !setup: create the Horizons RP: Worldwide channel structure.
  const setupUserId = '1312960418288898062';
