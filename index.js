@@ -318,7 +318,8 @@ client.once('ready', async()=>{
   status:'online'
  });
  try {
-  const payload = commands.map(command => command.toJSON());
+  // `commands` are already JSON payloads (serialized at declaration).
+  const payload = commands;
   const names = payload.map(command => command.name);
   const duplicates = names.filter((name, index) => names.indexOf(name) !== index);
   if (duplicates.length) throw new Error('Duplicate slash command names: ' + [...new Set(duplicates)].join(', '));
