@@ -103,8 +103,8 @@ const commands = [
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
-  .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
+  .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
  ,
  new SlashCommandBuilder().setName('whitelist').setDescription('Manage security whitelist entries')
   .addSubcommand(sub=>sub.setName('add_user').setDescription('Add user to whitelist')
