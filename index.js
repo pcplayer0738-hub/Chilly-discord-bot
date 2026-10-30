@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS giveaways (
 CREATE TABLE IF NOT EXISTS entries (
  giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
 );
+CREATE TABLE IF NOT EXISTS autoreactions (guild TEXT NOT NULL, trigger TEXT NOT NULL, emoji TEXT NOT NULL, PRIMARY KEY(guild,trigger));
 CREATE TABLE IF NOT EXISTS reaction_roles (
  guild TEXT NOT NULL, channel TEXT NOT NULL, message TEXT NOT NULL, emoji_key TEXT NOT NULL, emoji_input TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(guild,message,emoji_key)
 );
@@ -206,22 +207,42 @@ const commands = [
  new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
   .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
- new SlashCommandBuilder().setName('giveaway').setDescription('Start a giveaway')
+ new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
   .addIntegerOption(o=>o.setName('minutes').setDescription('Duration').setMinValue(1).setMaxValue(10080).setRequired(true))
   .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true)),
- new SlashCommandBuilder().setName('giveaway-end').setDescription('End giveaway early')
+ new SlashCommandBuilder().setName('gend').setDescription('End giveaway early')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
- new SlashCommandBuilder().setName('reroll').setDescription('Pick new winners')
+ new SlashCommandBuilder().setName('greroll').setDescription('Pick new winners')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+ new SlashCommandBuilder().setName('steal').setDescription('Add an emoji or sticker from a replied message to this server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
+  .addStringOption(o=>o.setName('message_id').setDescription('ID of the message containing the emoji or sticker').setRequired(true)),
  new SlashCommandBuilder().setName('reaction-role').setDescription('Give a role when members react to a message')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
   .addStringOption(o=>o.setName('message_id').setDescription('ID of the embed/message to add the reaction to').setRequired(true))
   .addStringOption(o=>o.setName('emoji').setDescription('Unicode emoji or custom emoji from this server').setRequired(true))
   .addRoleOption(o=>o.setName('role').setDescription('Role to give/remove when reacting').setRequired(true)),
+ new SlashCommandBuilder().setName('autoreact').setDescription('Manage automatic message reactions')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('add').setDescription('Add an automatic reaction for a trigger')
+   .addStringOption(o=>o.setName('trigger').setDescription('Exact word or phrase to match').setMaxLength(100).setRequired(true))
+   .addStringOption(o=>o.setName('emoji').setDescription('Emoji to react with').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('remove').setDescription('Remove an automatic reaction')
+   .addStringOption(o=>o.setName('trigger').setDescription('Trigger to remove').setMaxLength(100).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('list').setDescription('List automatic reactions'))
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Remove all automatic reactions')),
+ new SlashCommandBuilder().setName('auto-role').setDescription('Set the role automatically given to new members')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Role to give new members').setRequired(true)),
+ new SlashCommandBuilder().setName('role-all').setDescription('Give a role to all existing humans or bots')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Role to assign').setRequired(true))
+  .addStringOption(o=>o.setName('type').setDescription('Choose which members receive the role').setRequired(true)
+   .addChoices({name:'Bot only',value:'bot'},{name:'Human only',value:'human'})),
  new SlashCommandBuilder().setName('role-colour').setDescription('Change a role colour using a colour name or hex code')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
   .addRoleOption(o=>o.setName('role').setDescription('Role whose colour should change').setRequired(true))
@@ -419,6 +440,30 @@ async function applyReactionRole(reaction, user, addRole) {
 client.on('messageReactionAdd', (reaction, user) => applyReactionRole(reaction, user, true));
 client.on('messageReactionRemove', (reaction, user) => applyReactionRole(reaction, user, false));
 
+async function stealFromSourceMessage(guild, sourceMessage) {
+ if(!guild.members.me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) {
+  return {ok:false,message:'I need **Manage Expressions** (Manage Emojis and Stickers) permission.'};
+ }
+ const customEmojiMatch = sourceMessage.content?.match(/<a?:([A-Za-z0-9_]{2,32}):(\d{17,20})>/);
+ if(customEmojiMatch) {
+  const [, rawName, id] = customEmojiMatch;
+  const animated = sourceMessage.content.includes(`<a:${rawName}:${id}>`);
+  const ext = animated ? 'gif' : 'png';
+  const url = `https://cdn.discordapp.com/emojis/${id}.${ext}?quality=lossless`;
+  const name = rawName.slice(0,32);
+  const created = await guild.emojis.create({ attachment:url, name, reason:'Emoji added using Chilly /steal' });
+  return {ok:true,message:`✅ Added emoji ${created} (**${created.name}**) to this server.`};
+ }
+ const sticker = sourceMessage.stickers?.first();
+ if(sticker) {
+  const safeName = (sticker.name || 'stolen_sticker').toLowerCase().replace(/[^a-z0-9_]/g,'_').slice(0,30) || 'stolen_sticker';
+  const tags = (sticker.tags || sticker.name || 'sticker').slice(0,200);
+  const created = await guild.stickers.create({ file:sticker.url, name:safeName, tags, reason:'Sticker added using Chilly /steal' });
+  return {ok:true,message:`✅ Added sticker **${created.name}** to this server.`};
+ }
+ return {ok:false,message:'❌ I could not find a custom emoji or sticker in that message. Unicode emojis cannot be added as server emojis.'};
+}
+
 client.on('interactionCreate', async i=>{
  try {
   if(i.isButton()&&i.customId==='chilly_ticket_open') {
@@ -482,7 +527,7 @@ client.on('interactionCreate', async i=>{
     antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
     automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
     credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
-    giveawaycog:{title:'GiveawayCog',body:'`/giveaway` · `/giveaway-end` · `/reroll`'},
+    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
     misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
@@ -505,6 +550,15 @@ client.on('interactionCreate', async i=>{
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
+  if(c==='steal') {
+   if(!g) return i.reply({content:'Use /steal inside a server.',ephemeral:true});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageEmojisAndStickers) && !isTrustedOwner && u.id!==g.ownerId) return i.reply({content:'⛔ You need Manage Expressions permission to use /steal.',ephemeral:true});
+   const messageId=i.options.getString('message_id',true).trim();
+   if(!/^\d{17,20}$/.test(messageId)) return i.reply({content:'Please provide a valid Discord message ID.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   try { const source=await i.channel.messages.fetch(messageId); const result=await stealFromSourceMessage(g,source); return i.editReply(result.message); }
+   catch(error) { console.error('/steal failed:',error); return i.editReply('❌ I could not fetch or add that emoji/sticker. Make sure the message is in this channel and I have Read Message History and Manage Expressions permissions. The server may also have reached its emoji/sticker limit.'); }
+  }
   const hasAdminAccess = isTrustedOwner || isGuildOwner || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
   const moderationPermissions = {
    warn: PermissionFlagsBits.ModerateMembers,
@@ -826,6 +880,55 @@ client.on('interactionCreate', async i=>{
    setTimeout(()=>i.followUp({content:'⏰ <@'+u.id+'> Reminder: '+msg,allowedMentions:{users:[u.id]}}).catch(()=>{}),seconds*1000);
    return;
   }
+  if(c==='autoreact') {
+   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   if(sub==='add') {
+    const trigger=i.options.getString('trigger',true).trim().toLowerCase();
+    const emoji=i.options.getString('emoji',true).trim();
+    const parsed=normalizeReactionEmoji(emoji);
+    try { await i.guild.emojis.resolve(parsed.key) || null; } catch {}
+    db.prepare('INSERT INTO autoreactions(guild,trigger,emoji) VALUES(?,?,?) ON CONFLICT(guild,trigger) DO UPDATE SET emoji=excluded.emoji').run(g.id,trigger,emoji);
+    return i.reply({content:`✅ Auto-reaction added: **${trigger}** → ${emoji}`,ephemeral:true});
+   }
+   if(sub==='remove') {
+    const trigger=i.options.getString('trigger',true).trim().toLowerCase();
+    const result=db.prepare('DELETE FROM autoreactions WHERE guild=? AND trigger=?').run(g.id,trigger);
+    return i.reply({content:result.changes?'✅ Auto-reaction removed.':'No matching trigger was found.',ephemeral:true});
+   }
+   if(sub==='list') {
+    const rows=db.prepare('SELECT trigger,emoji FROM autoreactions WHERE guild=? ORDER BY trigger').all(g.id);
+    return i.reply({content:rows.length?rows.map(x=>`• **${x.trigger}** → ${x.emoji}`).join('\n'):'No auto-reactions configured.',ephemeral:true});
+   }
+   if(sub==='reset') {
+    const result=db.prepare('DELETE FROM autoreactions WHERE guild=?').run(g.id);
+    return i.reply({content:`✅ Removed ${result.changes} auto-reaction(s).`,ephemeral:true});
+   }
+  }
+  if(c==='auto-role') {
+   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   const role=i.options.getRole('role',true);
+   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
+   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'autorole',role.id);
+   return i.reply({content:`✅ New members will automatically receive ${role}.`,ephemeral:true});
+  }
+  if(c==='role-all') {
+   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   const role=i.options.getRole('role',true), type=i.options.getString('type',true);
+   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
+   if(!g.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({content:'I need Manage Roles permission.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   let members;
+   try { members=await g.members.fetch(); } catch { return i.editReply('❌ I could not fetch server members. Check the Server Members Intent and permissions.'); }
+   const targets=members.filter(m=>type==='bot'?m.user.bot:!m.user.bot && !m.user.system && !m.user.bot);
+   let added=0, failed=0;
+   for(const member of targets.values()) {
+    if(member.roles.cache.has(role.id) || member.id===g.members.me.id) continue;
+    try { await member.roles.add(role,'Bulk role assignment by Chilly'); added++; }
+    catch { failed++; }
+   }
+   return i.editReply(`✅ Finished. Added ${role} to **${added}** ${type==='bot'?'bot':'human'} member(s).${failed?` Failed: **${failed}**.`:''}`);
+  }
   if(c==='role-colour') {
    if(!g) return i.reply({content:'This command can only be used inside a server.',ephemeral:true});
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Manage Roles permission required.',ephemeral:true});
@@ -872,7 +975,7 @@ client.on('interactionCreate', async i=>{
     .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
-  if(c==='giveaway') {
+  if(c==='gstart') {
    const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
@@ -885,11 +988,11 @@ client.on('interactionCreate', async i=>{
    setTimeout(()=>endGiveaway(id).catch(console.error),mins*60000);
    return;
   }
-  if(c==='giveaway-end') {
+  if(c==='gend') {
    const r=await endGiveaway(i.options.getString('id'));
    return i.reply(r.error?{content:r.error,ephemeral:true}:{content:'Giveaway ended.'});
   }
-  if(c==='reroll') {
+  if(c==='greroll') {
    const r=await endGiveaway(i.options.getString('id'),true);
    if(r.error) return i.reply({content:r.error,ephemeral:true});
    return i.reply(r.winners.length?'🎉 New winner(s): '+r.winners.map(x=>'<@'+x+'>').join(', '):'No entries to reroll.');
@@ -945,6 +1048,10 @@ client.on('guildMemberRemove', async member => {
  }
 });
 client.on('guildMemberAdd', async member => {
+ try {
+  const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(member.guild.id,'autorole')?.value;
+  if(roleId) { const role=await member.guild.roles.fetch(roleId).catch(()=>null); const botMember=member.guild.members.me; if(role && !role.managed && role.position<botMember.roles.highest.position && botMember.permissions.has(PermissionFlagsBits.ManageRoles)) await member.roles.add(role,'Configured Chilly auto-role'); }
+ } catch(error) { console.error('Auto-role failed:',error.message); }
  const cfg=settings(member.guild.id);
  if(!cfg.antiraid) return;
  const now=Date.now(), list=(recentJoins.get(member.guild.id)||[]).filter(t=>now-t<30000);
@@ -986,7 +1093,19 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+ if(message.guild && message.content) {
+  const lower=message.content.toLowerCase();
+  const matches=db.prepare('SELECT trigger,emoji FROM autoreactions WHERE guild=?').all(message.guild.id).filter(row=>lower.includes(row.trigger));
+  for(const row of matches.slice(0,3)) { try { const parsed=normalizeReactionEmoji(row.emoji); await message.react(parsed.reactValue); } catch(error) { console.error('Auto-reaction failed:',error.message); } }
+ }
  const rawPrefix=message.content.trim().toLowerCase();
+ if(message.guild && rawPrefix.startsWith('?steal')) {
+  if(!message.member.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers) && message.author.id!==TRUSTED_OWNER_ID && message.author.id!==message.guild.ownerId) return message.reply('⛔ You need **Manage Expressions** permission to use ?steal.').catch(()=>{});
+  const source=message.reference?.messageId ? await message.channel.messages.fetch(message.reference.messageId).catch(()=>null) : null;
+  if(!source) return message.reply('Reply directly to a message containing a custom emoji or sticker, then type `?steal`.').catch(()=>{});
+  try { const result=await stealFromSourceMessage(message.guild,source); return message.reply(result.message).catch(()=>{}); }
+  catch(error) { console.error('?steal failed:',error); return message.reply('❌ I could not add that emoji/sticker. Check Manage Expressions permission and your server emoji/sticker limit.').catch(()=>{}); }
+ }
  if(message.guild && (rawPrefix==='.hide'||rawPrefix==='.unhide')) {
   const canManage=message.member.permissions.has(PermissionFlagsBits.ManageChannels)||message.member.permissions.has(PermissionFlagsBits.Administrator)||message.author.id===message.guild.ownerId||message.author.id===TRUSTED_OWNER_ID;
   if(!canManage) return message.reply('⛔ You need **Manage Channels** to use this.').catch(()=>{});
