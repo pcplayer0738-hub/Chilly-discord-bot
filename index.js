@@ -1,7 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType, StringSelectMenuBuilder
+  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials
 } = require('discord.js');
 const Database = require('better-sqlite3');
 
@@ -14,7 +14,7 @@ if (!TOKEN || !CLIENT_ID) {
   console.error('Missing DISCORD_TOKEN or CLIENT_ID.');
   process.exit(1);
 }
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.MessageContent], partials: [Partials.Message, Partials.Channel, Partials.Reaction] });
 const db = new Database('chilly.sqlite');
 db.exec(`CREATE TABLE IF NOT EXISTS chilly_config (guild TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(guild,key))`);
 db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS giveaways (
 );
 CREATE TABLE IF NOT EXISTS entries (
  giveaway TEXT, user TEXT, PRIMARY KEY(giveaway,user)
+);
+CREATE TABLE IF NOT EXISTS reaction_roles (
+ guild TEXT NOT NULL, channel TEXT NOT NULL, message TEXT NOT NULL, emoji_key TEXT NOT NULL, emoji_input TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(guild,message,emoji_key)
 );
 CREATE TABLE IF NOT EXISTS invite_counts (guild TEXT, user TEXT, invites INTEGER DEFAULT 0, PRIMARY KEY(guild,user));
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -214,6 +217,11 @@ const commands = [
  new SlashCommandBuilder().setName('reroll').setDescription('Pick new winners')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+ new SlashCommandBuilder().setName('reaction-role').setDescription('Give a role when members react to a message')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addStringOption(o=>o.setName('message_id').setDescription('ID of the embed/message to add the reaction to').setRequired(true))
+  .addStringOption(o=>o.setName('emoji').setDescription('Unicode emoji or custom emoji from this server').setRequired(true))
+  .addRoleOption(o=>o.setName('role').setDescription('Role to give/remove when reacting').setRequired(true)),
  new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation and server log channel')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
@@ -375,6 +383,38 @@ client.once('ready', async()=>{
   setTimeout(()=>endGiveaway(g.id).catch(console.error),Math.max(0,g.ends*1000-Date.now()));
  }
 });
+function normalizeReactionEmoji(input) {
+ const value = String(input || '').trim();
+ const custom = value.match(/^<a?:([A-Za-z0-9_~]+):(\d+)>$/) || value.match(/^([A-Za-z0-9_~]+):(\d+)$/);
+ if (custom) return { key: custom[2], reactValue: `${custom[1]}:${custom[2]}` };
+ if (/^\d{15,22}$/.test(value)) return { key: value, reactValue: value };
+ return { key: value, reactValue: value };
+}
+
+async function applyReactionRole(reaction, user, addRole) {
+ try {
+  if (user?.bot || !reaction?.message?.guild) return;
+  if (reaction.partial) await reaction.fetch();
+  const message = reaction.message;
+  if (message.partial) await message.fetch();
+  const emojiKey = reaction.emoji.id || reaction.emoji.name;
+  const mapping = db.prepare('SELECT role FROM reaction_roles WHERE guild=? AND channel=? AND message=? AND emoji_key=?')
+   .get(message.guild.id, message.channelId, message.id, emojiKey);
+  if (!mapping) return;
+  const member = await message.guild.members.fetch(user.id).catch(()=>null);
+  if (!member) return;
+  const role = await message.guild.roles.fetch(mapping.role).catch(()=>null);
+  if (!role || role.managed || role.position >= message.guild.members.me.roles.highest.position) return;
+  if (addRole) await member.roles.add(role, 'Chilly reaction role').catch(()=>{});
+  else await member.roles.remove(role, 'Chilly reaction role reaction removed').catch(()=>{});
+ } catch (error) {
+  console.error('Reaction-role event failed:', error?.message || error);
+ }
+}
+
+client.on('messageReactionAdd', (reaction, user) => applyReactionRole(reaction, user, true));
+client.on('messageReactionRemove', (reaction, user) => applyReactionRole(reaction, user, false));
+
 client.on('interactionCreate', async i=>{
  try {
   if(i.isButton()&&i.customId==='chilly_ticket_open') {
@@ -666,6 +706,7 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='warn') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
+   if(to.id===TRUSTED_OWNER_ID) return i.reply({content:'🛡️ This user is protected. Chilly cannot warn this account.',ephemeral:true});
    let dmDone=false;
    try { await to.send({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
@@ -684,7 +725,9 @@ client.on('interactionCreate', async i=>{
    return i.reply({content:'🧹 Deleted '+deleted.size+' messages.',ephemeral:true});
   }
   if(c==='timeout'||c==='untimeout') {
-   const to=i.options.getUser('user'), m=await g.members.fetch(to.id);
+   const to=i.options.getUser('user');
+   if(to.id===TRUSTED_OWNER_ID) return i.reply({content:'🛡️ This user is protected. Chilly cannot mute or unmute this account.',ephemeral:true});
+   const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
    if(c==='timeout') {
     const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
@@ -705,6 +748,7 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='kick'||c==='ban') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
+   if(to.id===TRUSTED_OWNER_ID) return i.reply({content:'🛡️ This user is protected. Chilly cannot kick or ban this account.',ephemeral:true});
    const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',ephemeral:true});
    let dmDone=false;
@@ -777,6 +821,33 @@ client.on('interactionCreate', async i=>{
    await i.reply({content:'⏰ Reminder set for '+seconds+' seconds.',ephemeral:true});
    setTimeout(()=>i.followUp({content:'⏰ <@'+u.id+'> Reminder: '+msg,allowedMentions:{users:[u.id]}}).catch(()=>{}),seconds*1000);
    return;
+  }
+  if(c==='reaction-role') {
+   if(!g) return i.reply({content:'This command can only be used inside a server.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   const messageId=i.options.getString('message_id', true).trim();
+   const emojiInput=i.options.getString('emoji', true).trim();
+   const role=i.options.getRole('role', true);
+   if(!/^\d{15,22}$/.test(messageId)) return i.editReply('Please provide a valid Discord message ID.');
+   if(role.id===g.id || role.managed || role.position >= g.members.me.roles.highest.position) return i.editReply('I cannot assign that role. Move my bot role above the selected role and choose a non-managed role.');
+   const parsed=normalizeReactionEmoji(emojiInput);
+   if(!parsed.reactValue) return i.editReply('Please provide a valid emoji.');
+   let message=null;
+   for(const channel of g.channels.cache.values()) {
+    if(!channel.isTextBased() || !channel.messages) continue;
+    message=await channel.messages.fetch(messageId).catch(()=>null);
+    if(message) break;
+   }
+   if(!message) return i.editReply('I could not find that message in this server. Check the message ID and make sure I can view its channel.');
+   try {
+    await message.react(parsed.reactValue);
+   } catch (error) {
+    return i.editReply('I could not add that emoji reaction. Check the emoji is valid and I have Add Reactions / Read Message History permissions.');
+   }
+   const emojiKey=parsed.key;
+   db.prepare('INSERT INTO reaction_roles(guild,channel,message,emoji_key,emoji_input,role) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,message,emoji_key) DO UPDATE SET channel=excluded.channel,emoji_input=excluded.emoji_input,role=excluded.role')
+    .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
+   return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
   if(c==='giveaway') {
    const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
