@@ -222,6 +222,10 @@ const commands = [
   .addStringOption(o=>o.setName('message_id').setDescription('ID of the embed/message to add the reaction to').setRequired(true))
   .addStringOption(o=>o.setName('emoji').setDescription('Unicode emoji or custom emoji from this server').setRequired(true))
   .addRoleOption(o=>o.setName('role').setDescription('Role to give/remove when reacting').setRequired(true)),
+ new SlashCommandBuilder().setName('role-colour').setDescription('Change a role colour using a colour name or hex code')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Role whose colour should change').setRequired(true))
+  .addStringOption(o=>o.setName('colour').setDescription('Colour name (Red, Blue, etc.) or hex code (#FF0000)').setRequired(true)),
  new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation and server log channel')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
@@ -821,6 +825,25 @@ client.on('interactionCreate', async i=>{
    await i.reply({content:'⏰ Reminder set for '+seconds+' seconds.',ephemeral:true});
    setTimeout(()=>i.followUp({content:'⏰ <@'+u.id+'> Reminder: '+msg,allowedMentions:{users:[u.id]}}).catch(()=>{}),seconds*1000);
    return;
+  }
+  if(c==='role-colour') {
+   if(!g) return i.reply({content:'This command can only be used inside a server.',ephemeral:true});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Manage Roles permission required.',ephemeral:true});
+   const role=i.options.getRole('role', true);
+   const input=i.options.getString('colour', true).trim().toLowerCase();
+   const namedColours={red:'#FF0000',blue:'#0000FF',green:'#00FF00',yellow:'#FFFF00',orange:'#FFA500',purple:'#800080',pink:'#FFC0CB',black:'#000000',white:'#FFFFFF',cyan:'#00FFFF',magenta:'#FF00FF',teal:'#008080',gold:'#FFD700',grey:'#808080',gray:'#808080',brown:'#A52A2A',navy:'#000080'};
+   const hex=namedColours[input] || (input.startsWith('#')?input:'#'+input);
+   if(!/^#[0-9a-f]{6}$/i.test(hex)) return i.reply({content:'Invalid colour. Use a colour name (Red, Blue, Green, etc.) or a 6-digit hex code like `#FF0000`.',ephemeral:true});
+   if(role.id===g.id || role.managed) return i.reply({content:'⛔ I cannot change the colour of @everyone or an integration-managed role.',ephemeral:true});
+   const botMember=g.members.me;
+   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles) || role.position>=botMember.roles.highest.position) return i.reply({content:'⛔ I need Manage Roles permission and my highest role must be above the selected role.',ephemeral:true});
+   try {
+    await role.setColor(hex, `Role colour changed by ${u.tag}`);
+    return i.reply({content:`✅ Changed ${role} colour to **${hex.toUpperCase()}**.`,ephemeral:true});
+   } catch(error) {
+    console.error('role-colour failed:', error);
+    return i.reply({content:'❌ I could not change that role colour. Check my Manage Roles permission and role hierarchy.',ephemeral:true});
+   }
   }
   if(c==='reaction-role') {
    if(!g) return i.reply({content:'This command can only be used inside a server.',ephemeral:true});
