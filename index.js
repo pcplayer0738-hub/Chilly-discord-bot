@@ -227,7 +227,6 @@ const commands = [
   .addStringOption(o=>o.setName('emoji').setDescription('Unicode emoji or custom emoji from this server').setRequired(true))
   .addRoleOption(o=>o.setName('role').setDescription('Role to give/remove when reacting').setRequired(true)),
  new SlashCommandBuilder().setName('autoreact').setDescription('Manage automatic message reactions')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addSubcommand(sub=>sub.setName('add').setDescription('Add an automatic reaction for a trigger')
    .addStringOption(o=>o.setName('trigger').setDescription('Exact word or phrase to match').setMaxLength(100).setRequired(true))
    .addStringOption(o=>o.setName('emoji').setDescription('Emoji to react with').setRequired(true)))
@@ -882,6 +881,7 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='autoreact') {
    if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'⛔ You need Manage Server permission to use /autoreact.',ephemeral:true});
    const sub=i.options.getSubcommand();
    if(sub==='add') {
     const trigger=i.options.getString('trigger',true).trim().toLowerCase();
