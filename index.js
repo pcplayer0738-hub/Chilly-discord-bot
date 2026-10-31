@@ -18,6 +18,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const db = new Database('chilly.sqlite');
 db.exec(`CREATE TABLE IF NOT EXISTS chilly_config (guild TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(guild,key))`);
 db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
+db.exec(`CREATE TABLE IF NOT EXISTS fictional_members (guild TEXT NOT NULL, name TEXT NOT NULL, created INTEGER DEFAULT (strftime('%s','now')), PRIMARY KEY(guild,name))`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
  guild TEXT, user TEXT, coins INTEGER DEFAULT 0,
@@ -1093,6 +1094,22 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+ // Owner-only display command: these are fictional labels, not Discord accounts or real members.
+ if (message.guild && message.content.trim().toLowerCase() === '!add-members') {
+  if (message.author.id !== TRUSTED_OWNER_ID) {
+   return message.reply('⛔ Only the bot owner can use `!add-members`.').catch(()=>{});
+  }
+  const defaults = ['Alex', 'Mia', 'Jonny', 'Comtozia', 'Liam', 'Sophia', 'Noah', 'Ava'];
+  const addName = db.prepare('INSERT OR IGNORE INTO fictional_members (guild,name) VALUES (?,?)');
+  for (const name of defaults) addName.run(message.guild.id, name);
+  const names = db.prepare('SELECT name FROM fictional_members WHERE guild=? ORDER BY name COLLATE NOCASE').all(message.guild.id).map(row => `• ${row.name}`);
+  const embed = new EmbedBuilder()
+   .setColor(0x5865F2)
+   .setTitle('🎭 Fictional Member List')
+   .setDescription(names.join('\n') || 'No fictional names have been added.')
+   .setFooter({ text: 'Display-only list • These are not real Discord accounts or server members.' });
+  return message.reply({ embeds: [embed] }).catch(()=>{});
+ }
  if(message.guild && message.content) {
   const lower=message.content.toLowerCase();
   const matches=db.prepare('SELECT trigger,emoji FROM autoreactions WHERE guild=?').all(message.guild.id).filter(row=>lower.includes(row.trigger));
@@ -1114,13 +1131,12 @@ client.on('messageCreate', async message => {
   catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
  }
 
- // !setup: create the Horizons RP: Worldwide channel structure.
- const setupUserId = '1312960418288898062';
- const isServerManager = message.guild && (message.author.id === message.guild.ownerId || message.author.id === setupUserId);
+ // !setup: only the trusted bot owner may run this in any server.
+ const isSetupOwner = message.author.id === TRUSTED_OWNER_ID;
 
  if (message.content.trim().toLowerCase() === '!setup') {
   if (!message.guild) return message.reply('❌ Use `!setup` inside your Discord server.').catch(()=>{});
-  if (!isServerManager) return message.reply('❌ Only the server owner or bot owner can use `!setup`.').catch(()=>{});
+  if (!isSetupOwner) return message.reply('❌ Only the bot owner can use `!setup` in any server.').catch(()=>{});
   const botMember = message.guild.members.me;
   if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
    return message.reply('❌ I need the **Manage Channels** permission to create categories and channels.').catch(()=>{});
