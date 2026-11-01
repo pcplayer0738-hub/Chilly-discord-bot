@@ -49,6 +49,33 @@ CREATE TABLE IF NOT EXISTS guild_settings (
  guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0
 );
 `);
+// Global OWO-style economy: one wallet and inventory per Discord user across every server.
+db.exec(`
+CREATE TABLE IF NOT EXISTS global_users (
+ user TEXT PRIMARY KEY, coins INTEGER NOT NULL DEFAULT 0,
+ daily INTEGER NOT NULL DEFAULT 0, worked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS global_inventory (
+ user TEXT NOT NULL, item TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(user,item)
+);
+`);
+// Import existing server-specific balances/items once. Coins and item quantities are summed;
+// cooldown timestamps use MAX so switching servers cannot bypass a cooldown.
+if (!db.prepare("SELECT 1 FROM chilly_config WHERE guild='__global_economy__' AND key='migration_v1'").get()) {
+ db.transaction(() => {
+  db.prepare(`INSERT INTO global_users(user,coins,daily,worked)
+   SELECT user, SUM(COALESCE(coins,0)), MAX(COALESCE(daily,0)), MAX(COALESCE(worked,0))
+   FROM users WHERE user IS NOT NULL GROUP BY user
+   ON CONFLICT(user) DO NOTHING`).run();
+  db.prepare(`INSERT INTO global_inventory(user,item,quantity)
+   SELECT user,item,SUM(COALESCE(quantity,0)) FROM inventory
+   WHERE user IS NOT NULL AND item IS NOT NULL GROUP BY user,item
+   ON CONFLICT(user,item) DO NOTHING`).run();
+  db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES('__global_economy__','migration_v1','done')").run();
+ })();
+}
+
 
 // Migration for older SQLite databases. Keep existing rows; add columns only when missing.
 function ensureColumn(table, column, definition) {
@@ -110,11 +137,6 @@ const commands = [
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
- ,
- new SlashCommandBuilder().setName('dm').setDescription('Send a direct message to one selected member')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addUserOption(o=>o.setName('user').setDescription('Member to receive the DM').setRequired(true))
-  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
  ,
  new SlashCommandBuilder().setName('whitelist').setDescription('Manage security whitelist entries')
   .addSubcommand(sub=>sub.setName('add_user').setDescription('Add user to whitelist')
@@ -216,7 +238,7 @@ const commands = [
  new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
-  .addStringOption(o=>o.setName('duration').setDescription('Duration, e.g. 1m, 1h, 1d').setMaxLength(10).setRequired(true))
+  .addIntegerOption(o=>o.setName('minutes').setDescription('Duration').setMinValue(1).setMaxValue(10080).setRequired(true))
   .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true)),
  new SlashCommandBuilder().setName('gend').setDescription('End giveaway early')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -264,11 +286,8 @@ const commands = [
 ].map(c=>c.toJSON());
 
 function account(g,u) {
- // If an older database had no guild column, attach that user's legacy row
- // to the server they first use the economy in, preserving their coin values.
- db.prepare('UPDATE users SET guild=? WHERE user=? AND guild IS NULL').run(g,u);
- db.prepare('INSERT OR IGNORE INTO users(guild,user) VALUES(?,?)').run(g,u);
- return db.prepare('SELECT * FROM users WHERE guild=? AND user=?').get(g,u);
+ db.prepare('INSERT OR IGNORE INTO global_users(user) VALUES(?)').run(u);
+ return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
 }
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
 function choose(a,n) {
@@ -445,33 +464,6 @@ async function applyReactionRole(reaction, user, addRole) {
 client.on('messageReactionAdd', (reaction, user) => applyReactionRole(reaction, user, true));
 client.on('messageReactionRemove', (reaction, user) => applyReactionRole(reaction, user, false));
 
-const GIVEAWAY_EMOJI_ID = '1564349893907062844';
-async function handleGiveawayReaction(reaction, user, add) {
- try {
-  if (!user || user.bot) return;
-  if (reaction.partial) await reaction.fetch();
-  const message = reaction.message;
-  if (message.partial) await message.fetch();
-  if (!message.guild) return;
-  if (reaction.emoji.id !== GIVEAWAY_EMOJI_ID) return;
-  const g = db.prepare('SELECT * FROM giveaways WHERE message=? AND guild=?').get(message.id, message.guild.id);
-  if (!g || g.ended || g.ends * 1000 <= Date.now()) return;
-  if (add) db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(g.id,user.id);
-  else db.prepare('DELETE FROM entries WHERE giveaway=? AND user=?').run(g.id,user.id);
-  const count = db.prepare('SELECT COUNT(*) AS n FROM entries WHERE giveaway=?').get(g.id).n;
-  const fresh = await message.fetch().catch(()=>null);
-  if (fresh && fresh.embeds[0]) {
-   const old = fresh.embeds[0];
-   const description = (old.description || '').replace(/(\\*\\*Participants:\\*\\* )\\d+/, '$1' + count);
-   await fresh.edit({embeds:[EmbedBuilder.from(old).setDescription(description)]}).catch(()=>{});
-  }
- } catch (error) {
-  console.error('Giveaway reaction handler error:', error);
- }
-}
-client.on('messageReactionAdd', (reaction, user) => handleGiveawayReaction(reaction, user, true));
-client.on('messageReactionRemove', (reaction, user) => handleGiveawayReaction(reaction, user, false));
-
 async function stealFromSourceMessage(guild, sourceMessage) {
  if(!guild.members.me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) {
   return {ok:false,message:'I need **Manage Expressions** (Manage Emojis and Stickers) permission.'};
@@ -525,9 +517,9 @@ client.on('interactionCreate', async i=>{
     const a=game.picks[game.challenger], b=game.picks[game.opponent];
     const win=(a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper');
     if(a===b) {
-     db.transaction(()=>{db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet,game.guild,game.challenger);db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet,game.guild,game.opponent);})();
-    } else if(win) db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet*2,game.guild,game.challenger);
-    else db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(game.bet*2,game.guild,game.opponent);
+     db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.challenger);db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.opponent);})();
+    } else if(win) db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.challenger);
+    else db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.opponent);
     const result=a===b?'It is a tie! Both bets were refunded.':'Winner: <@'+(win?game.challenger:game.opponent)+'> wins **'+money(game.bet*2)+'**!';
     const channel=await client.channels.fetch(game.channel).catch(()=>null);
     if(channel) await channel.send({content:'✊ **RPS Result**\n<@'+game.challenger+'> chose **'+a+'**\n<@'+game.opponent+'> chose **'+b+'**\n'+result}).catch(()=>{});
@@ -562,7 +554,7 @@ client.on('interactionCreate', async i=>{
     giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
-    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/dm` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
+    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
     moderation:{title:'Moderation',body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`. Each command requires its relevant Discord permission.'},
     np:{title:'NP',body:'No NP commands are currently configured in this build.'},
     reqrolecog:{title:'ReqRoleCog',body:'Role-request commands are not currently configured in this build.'},
@@ -605,21 +597,6 @@ client.on('interactionCreate', async i=>{
   if(moderationPermissions[c] && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator) && !i.memberPermissions?.has(moderationPermissions[c])) {
    return i.reply({content:`⛔ You need the appropriate Discord permission to use /${c}.`,ephemeral:true});
   }
-  if(c==='dm') {
-   if(!hasAdminAccess) return i.reply({content:'⛔ /dm is limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
-   const recipient=i.options.getUser('user',true);
-   const content=i.options.getString('message',true);
-   if(recipient.bot) return i.reply({content:'⛔ You cannot send a DM to a bot.',ephemeral:true});
-   if(recipient.id===u.id) return i.reply({content:'⛔ Please select another member.',ephemeral:true});
-   await i.deferReply({ephemeral:true});
-   try {
-    await recipient.send({content,allowedMentions:{parse:[]}});
-    return i.editReply(`✅ Direct message sent to **${recipient.tag}**.`);
-   } catch(error) {
-    console.error('/dm failed:',error);
-    return i.editReply(`❌ I couldn't DM **${recipient.tag}**. They may have DMs disabled or blocked messages from this server.`);
-   }
-  }
   if(c==='say') {
    if(!hasAdminAccess) return i.reply({content:'⛔ /say is limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
    const channel=i.options.getChannel('channel') || i.channel;
@@ -639,7 +616,7 @@ client.on('interactionCreate', async i=>{
     const rows=db.prepare('SELECT kind,target FROM whitelist WHERE guild=? AND kind=? ORDER BY created ASC').all(g.id,kind);
     const label={user:'Users',channel:'Channels',role:'Roles'}[kind];
     const list=rows.map(r=>r.kind==='user'?`<@${r.target}> — \`${r.target}\``:r.kind==='role'?`<@&${r.target}> — \`${r.target}\``:`<#${r.target}> — \`${r.target}\``);
-    return i.reply({content:`**Whitelist • ${label}**\n${list.length?list.join('\n').slice(0,1850):'No entries yet.'}`,ephemeral:true});
+    return i.reply({content:`**Whitelist • ${label}**\\n${list.length?list.join('\\n').slice(0,1850):'No entries yet.'}`,ephemeral:true});
    }
    const actions={
     add_user:{kind:'user',action:'add'},add_channel:{kind:'channel',action:'add'},add_role:{kind:'role',action:'add'},
@@ -664,7 +641,7 @@ client.on('interactionCreate', async i=>{
    const amount=i.options.getInteger('amount');
    if(to.bot) return i.reply({content:'You cannot add coins to a bot.',ephemeral:true});
    account(g.id,to.id);
-   db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(amount,g.id,to.id);
+   db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    const updated=account(g.id,to.id);
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
   }
@@ -729,7 +706,7 @@ client.on('interactionCreate', async i=>{
    const symbols=['🍒','🍋','🍇','⭐','🔔']; const roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]);
    let multiplier=roll[0]===roll[1]&&roll[1]===roll[2]? (roll[0]==='⭐'?5:3) : (roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0);
    const delta=multiplier?bet*multiplier: -bet;
-   db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(delta,g.id,u.id);
+   db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,u.id);
    return i.reply('🎰 **Chilly Slots**\n'+roll.join(' | ')+'\n'+(multiplier?'🎉 You won **'+money(bet*multiplier)+'**!':'😢 You lost **'+money(bet)+'**.')+'\nBalance: **'+money(account(g.id,u.id).coins)+'**');
   }
   if(c==='invites') {
@@ -745,7 +722,7 @@ client.on('interactionCreate', async i=>{
    const col=c==='daily'?'daily':'worked', cd=c==='daily'?86400:3600;
    const amount=c==='daily'?500:Math.floor(Math.random()*201)+100;
    if(now-a[col]<cd) return i.reply({content:'Try again in '+Math.ceil((cd-(now-a[col]))/60)+' minutes.',ephemeral:true});
-   db.prepare('UPDATE users SET coins=coins+?, '+col+'=? WHERE guild=? AND user=?').run(amount,now,g.id,u.id);
+   db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(amount,now,u.id);
    return i.reply('❄️ You earned **'+money(amount)+'**!');
   }
   if(c==='give') {
@@ -754,13 +731,13 @@ client.on('interactionCreate', async i=>{
    const a=account(g.id,u.id); account(g.id,to.id);
    if(a.coins<amount) return i.reply({content:'Not enough coins.',ephemeral:true});
    db.transaction(()=>{
-    db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(amount,g.id,u.id);
-    db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(amount,g.id,to.id);
+    db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(amount,u.id);
+    db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    })();
    return i.reply('💸 <@'+u.id+'> gave <@'+to.id+'> **'+money(amount)+'**.');
   }
   if(c==='leaderboard') {
-   const rows=db.prepare('SELECT user,coins FROM users WHERE guild=? ORDER BY coins DESC LIMIT 10').all(g.id);
+   const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all();
    return i.reply({embeds:[new EmbedBuilder().setTitle('🏆 Coin Leaderboard')
     .setDescription(rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — '+money(r.coins)).join('\n')||'No users yet.') ]});
   }
@@ -769,13 +746,13 @@ client.on('interactionCreate', async i=>{
    const item=i.options.getString('item'), price={'Cookie':100,'Coffee':250,'Golden Crown':1000}[item], a=account(g.id,u.id);
    if(a.coins<price) return i.reply({content:'Not enough coins.',ephemeral:true});
    db.transaction(()=>{
-    db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(price,g.id,u.id);
-    db.prepare('INSERT INTO inventory(guild,user,item,quantity) VALUES(?,?,?,1) ON CONFLICT(guild,user,item) DO UPDATE SET quantity=quantity+1').run(g.id,u.id,item);
+    db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(price,u.id);
+    db.prepare('INSERT INTO global_inventory(user,item,quantity) VALUES(?,?,1) ON CONFLICT(user,item) DO UPDATE SET quantity=quantity+1').run(u.id,item);
    })();
    return i.reply('✅ Purchased **'+item+'**!');
   }
   if(c==='inventory') {
-   const who=target||u, rows=db.prepare('SELECT item,quantity FROM inventory WHERE guild=? AND user=?').all(g.id,who.id);
+   const who=target||u, rows=db.prepare('SELECT item,quantity FROM global_inventory WHERE user=?').all(who.id);
    return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
   }
   if(c==='setlogs') {
@@ -884,7 +861,7 @@ client.on('interactionCreate', async i=>{
    if(!opponentMember) return i.reply({content:'The opponent must be a member of this server.',ephemeral:true});
    const a=account(g.id,u.id), b=account(g.id,opponent.id);
    if(a.coins<bet||b.coins<bet) return i.reply({content:'Both players must have at least **'+money(bet)+'** to play.',ephemeral:true});
-   db.transaction(()=>{db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(bet,g.id,u.id);db.prepare('UPDATE users SET coins=coins-? WHERE guild=? AND user=?').run(bet,g.id,opponent.id);})();
+   db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(bet,u.id);db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(bet,opponent.id);})();
    const gameId=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
    rpsGames.set(gameId,{guild:g.id,channel:i.channelId,challenger:u.id,opponent:opponent.id,bet,picks:{}});
    const row=new ActionRowBuilder().addComponents(
@@ -1024,26 +1001,16 @@ client.on('interactionCreate', async i=>{
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
   if(c==='gstart') {
-   const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
-   const match=duration.match(/^([1-9]\d*)(m|h|d)$/);
-   if(!match) return i.reply({content:'Invalid duration. Use formats like `1m`, `1h`, or `1d`.',ephemeral:true});
-   const amount=Number(match[1]), unit=match[2];
-   const durationMs=amount*(unit==='m'?60000:unit==='h'?3600000:86400000);
-   if(!Number.isSafeInteger(durationMs) || durationMs<60000 || durationMs>30*86400000)
-    return i.reply({content:'Duration must be between `1m` and `30d`.',ephemeral:true});
-   const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor((Date.now()+durationMs)/1000);
+   const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
+   const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
    const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} ${prize} ${CHILLY_EMOJI.gift}`)
-    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\nReact with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`)
-    .setFooter({text:'React to participate'}).setTimestamp(new Date(ends*1000));
-   const msg=await i.reply({embeds:[embed],fetchReply:true});
+    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\``)
+    .setFooter({text:'Ends at'}).setTimestamp(new Date(ends*1000));
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
+   const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
-   try { await msg.react(`<a:Winner:${GIVEAWAY_EMOJI_ID}>`); }
-   catch(error) {
-    console.error('Could not add giveaway entry reaction:', error);
-    await msg.reply('I could not add the entry emoji. Please check that I can use external emojis and add reactions.');
-   }
-   setTimeout(()=>endGiveaway(id).catch(console.error),durationMs);
+   setTimeout(()=>endGiveaway(id).catch(console.error),mins*60000);
    return;
   }
   if(c==='gend') {
@@ -1151,35 +1118,21 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
- // !threadperms: trusted bot owner only; deny thread creation, thread messaging and @everyone mentions server-wide.
- if (message.guild && message.content.trim().toLowerCase() === '!threadperms') {
+ // Owner-only display command: these are fictional labels, not Discord accounts or real members.
+ if (message.guild && message.content.trim().toLowerCase() === '!add-members') {
   if (message.author.id !== TRUSTED_OWNER_ID) {
-   return message.reply('⛔ Only the bot owner can use `!threadperms`.').catch(()=>{});
+   return message.reply('⛔ Only the bot owner can use `!add-members`.').catch(()=>{});
   }
-  const botMember = message.guild.members.me;
-  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
-   return message.reply('❌ I need **Manage Channels** permission to update channel permissions.').catch(()=>{});
-  }
-  await message.reply('🔒 Applying thread and mention restrictions to all existing channels and categories...').catch(()=>{});
-  const everyone = message.guild.roles.everyone;
-  const overwrite = {
-   CreatePublicThreads: false,
-   CreatePrivateThreads: false,
-   SendMessagesInThreads: false,
-   MentionEveryone: false
-  };
-  let updated = 0, failed = 0;
-  const channels = [...message.guild.channels.cache.values()];
-  for (const channel of channels) {
-   try {
-    await channel.permissionOverwrites.edit(everyone, overwrite, { reason: `!threadperms by trusted bot owner ${message.author.id}` });
-    updated++;
-   } catch (error) {
-    failed++;
-    console.error(`!threadperms failed for ${channel.name} (${channel.id}):`, error.message);
-   }
-  }
-  return message.reply(`✅ **Thread permissions updated.**\n• Channels/categories updated: **${updated}**\n• Failed: **${failed}**\n• Create Public Threads: **OFF**\n• Create Private Threads: **OFF**\n• Send Messages in Threads: **OFF**\n• Mention Everyone: **OFF**\n\nThese are @everyone denies; members with administrator permission can still bypass channel overwrites.`).catch(()=>{});
+  const defaults = ['Alex', 'Mia', 'Jonny', 'Comtozia', 'Liam', 'Sophia', 'Noah', 'Ava'];
+  const addName = db.prepare('INSERT OR IGNORE INTO fictional_members (guild,name) VALUES (?,?)');
+  for (const name of defaults) addName.run(message.guild.id, name);
+  const names = db.prepare('SELECT name FROM fictional_members WHERE guild=? ORDER BY name COLLATE NOCASE').all(message.guild.id).map(row => `• ${row.name}`);
+  const embed = new EmbedBuilder()
+   .setColor(0x5865F2)
+   .setTitle('🎭 Fictional Member List')
+   .setDescription(names.join('\n') || 'No fictional names have been added.')
+   .setFooter({ text: 'Display-only list • These are not real Discord accounts or server members.' });
+  return message.reply({ embeds: [embed] }).catch(()=>{});
  }
  if(message.guild && message.content) {
   const lower=message.content.toLowerCase();
@@ -1405,7 +1358,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    const a=getAccount(), now=Math.floor(Date.now()/1000), col=cmd==='daily'?'daily':'worked', cd=cmd==='daily'?86400:3600;
    if(now-a[col]<cd) return message.reply('⏳ Try again in '+Math.ceil((cd-(now-a[col]))/60)+' minute(s).');
    const earned=cmd==='daily'?500:Math.floor(Math.random()*201)+100;
-   db.prepare('UPDATE users SET coins=coins+?, '+col+'=? WHERE guild=? AND user=?').run(earned,now,guildId,userId);
+   db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(earned,now,userId);
    return message.reply('❄️ You earned **'+money(earned)+'**! Balance: **'+money(getAccount().coins)+'**');
   }
   if(cmd==='slots') {
@@ -1413,7 +1366,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    const a=getAccount(); if(a.coins<amount) return message.reply('❌ Not enough Chilly Coins.');
    const symbols=['🍒','🍋','🍇','⭐','🔔'], roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]);
    const mult=roll[0]===roll[1]&&roll[1]===roll[2]?(roll[0]==='⭐'?5:3):(roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0);
-   const delta=mult?amount*mult:-amount; db.prepare('UPDATE users SET coins=coins+? WHERE guild=? AND user=?').run(delta,guildId,userId);
+   const delta=mult?amount*mult:-amount; db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,userId);
    return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'🎉 Won **'+money(amount*mult)+'**!':'😢 Lost **'+money(amount)+'**.')+' Balance: **'+money(getAccount().coins)+'**');
   }
  }
