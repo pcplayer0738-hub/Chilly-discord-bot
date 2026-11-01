@@ -1005,7 +1005,7 @@ client.on('interactionCreate', async i=>{
   }
   if(c==='gstart') {
    const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
-   const match=duration.match(/^([1-9]\\d*)(m|h|d)$/);
+   const match=duration.match(/^([1-9]\d*)(m|h|d)$/);
    if(!match) return i.reply({content:'Invalid duration. Use formats like `1m`, `1h`, or `1d`.',ephemeral:true});
    const amount=Number(match[1]), unit=match[2];
    const durationMs=amount*(unit==='m'?60000:unit==='h'?3600000:86400000);
