@@ -111,6 +111,11 @@ const commands = [
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
  ,
+ new SlashCommandBuilder().setName('dm').setDescription('Send a direct message to one selected member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addUserOption(o=>o.setName('user').setDescription('Member to receive the DM').setRequired(true))
+  .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
+ ,
  new SlashCommandBuilder().setName('whitelist').setDescription('Manage security whitelist entries')
   .addSubcommand(sub=>sub.setName('add_user').setDescription('Add user to whitelist')
    .addUserOption(o=>o.setName('user').setDescription('User to whitelist').setRequired(true)))
@@ -557,7 +562,7 @@ client.on('interactionCreate', async i=>{
     giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
-    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
+    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/dm` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
     moderation:{title:'Moderation',body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`. Each command requires its relevant Discord permission.'},
     np:{title:'NP',body:'No NP commands are currently configured in this build.'},
     reqrolecog:{title:'ReqRoleCog',body:'Role-request commands are not currently configured in this build.'},
@@ -599,6 +604,21 @@ client.on('interactionCreate', async i=>{
   };
   if(moderationPermissions[c] && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator) && !i.memberPermissions?.has(moderationPermissions[c])) {
    return i.reply({content:`⛔ You need the appropriate Discord permission to use /${c}.`,ephemeral:true});
+  }
+  if(c==='dm') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ /dm is limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
+   const recipient=i.options.getUser('user',true);
+   const content=i.options.getString('message',true);
+   if(recipient.bot) return i.reply({content:'⛔ You cannot send a DM to a bot.',ephemeral:true});
+   if(recipient.id===u.id) return i.reply({content:'⛔ Please select another member.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   try {
+    await recipient.send({content,allowedMentions:{parse:[]}});
+    return i.editReply(`✅ Direct message sent to **${recipient.tag}**.`);
+   } catch(error) {
+    console.error('/dm failed:',error);
+    return i.editReply(`❌ I couldn't DM **${recipient.tag}**. They may have DMs disabled or blocked messages from this server.`);
+   }
   }
   if(c==='say') {
    if(!hasAdminAccess) return i.reply({content:'⛔ /say is limited to the bot owner, server owner, or members with Manage Server / Administrator permission.',ephemeral:true});
