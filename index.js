@@ -211,7 +211,7 @@ const commands = [
  new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
-  .addIntegerOption(o=>o.setName('minutes').setDescription('Duration').setMinValue(1).setMaxValue(10080).setRequired(true))
+  .addStringOption(o=>o.setName('duration').setDescription('Duration, e.g. 1m, 1h, 1d').setMaxLength(10).setRequired(true))
   .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true)),
  new SlashCommandBuilder().setName('gend').setDescription('End giveaway early')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -440,6 +440,33 @@ async function applyReactionRole(reaction, user, addRole) {
 client.on('messageReactionAdd', (reaction, user) => applyReactionRole(reaction, user, true));
 client.on('messageReactionRemove', (reaction, user) => applyReactionRole(reaction, user, false));
 
+const GIVEAWAY_EMOJI_ID = '1564349893907062844';
+async function handleGiveawayReaction(reaction, user, add) {
+ try {
+  if (!user || user.bot) return;
+  if (reaction.partial) await reaction.fetch();
+  const message = reaction.message;
+  if (message.partial) await message.fetch();
+  if (!message.guild) return;
+  if (reaction.emoji.id !== GIVEAWAY_EMOJI_ID) return;
+  const g = db.prepare('SELECT * FROM giveaways WHERE message=? AND guild=?').get(message.id, message.guild.id);
+  if (!g || g.ended || g.ends * 1000 <= Date.now()) return;
+  if (add) db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(g.id,user.id);
+  else db.prepare('DELETE FROM entries WHERE giveaway=? AND user=?').run(g.id,user.id);
+  const count = db.prepare('SELECT COUNT(*) AS n FROM entries WHERE giveaway=?').get(g.id).n;
+  const fresh = await message.fetch().catch(()=>null);
+  if (fresh && fresh.embeds[0]) {
+   const old = fresh.embeds[0];
+   const description = (old.description || '').replace(/(\\*\\*Participants:\\*\\* )\\d+/, '$1' + count);
+   await fresh.edit({embeds:[EmbedBuilder.from(old).setDescription(description)]}).catch(()=>{});
+  }
+ } catch (error) {
+  console.error('Giveaway reaction handler error:', error);
+ }
+}
+client.on('messageReactionAdd', (reaction, user) => handleGiveawayReaction(reaction, user, true));
+client.on('messageReactionRemove', (reaction, user) => handleGiveawayReaction(reaction, user, false));
+
 async function stealFromSourceMessage(guild, sourceMessage) {
  if(!guild.members.me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) {
   return {ok:false,message:'I need **Manage Expressions** (Manage Emojis and Stickers) permission.'};
@@ -592,7 +619,7 @@ client.on('interactionCreate', async i=>{
     const rows=db.prepare('SELECT kind,target FROM whitelist WHERE guild=? AND kind=? ORDER BY created ASC').all(g.id,kind);
     const label={user:'Users',channel:'Channels',role:'Roles'}[kind];
     const list=rows.map(r=>r.kind==='user'?`<@${r.target}> — \`${r.target}\``:r.kind==='role'?`<@&${r.target}> — \`${r.target}\``:`<#${r.target}> — \`${r.target}\``);
-    return i.reply({content:`**Whitelist • ${label}**\\n${list.length?list.join('\\n').slice(0,1850):'No entries yet.'}`,ephemeral:true});
+    return i.reply({content:`**Whitelist • ${label}**\n${list.length?list.join('\n').slice(0,1850):'No entries yet.'}`,ephemeral:true});
    }
    const actions={
     add_user:{kind:'user',action:'add'},add_channel:{kind:'channel',action:'add'},add_role:{kind:'role',action:'add'},
@@ -977,16 +1004,26 @@ client.on('interactionCreate', async i=>{
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
   if(c==='gstart') {
-   const prize=i.options.getString('prize'), mins=i.options.getInteger('minutes'), winners=i.options.getInteger('winners');
-   const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor(Date.now()/1000)+mins*60;
+   const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
+   const match=duration.match(/^([1-9]\\d*)(m|h|d)$/);
+   if(!match) return i.reply({content:'Invalid duration. Use formats like `1m`, `1h`, or `1d`.',ephemeral:true});
+   const amount=Number(match[1]), unit=match[2];
+   const durationMs=amount*(unit==='m'?60000:unit==='h'?3600000:86400000);
+   if(!Number.isSafeInteger(durationMs) || durationMs<60000 || durationMs>30*86400000)
+    return i.reply({content:'Duration must be between `1m` and `30d`.',ephemeral:true});
+   const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor((Date.now()+durationMs)/1000);
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
    const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} ${prize} ${CHILLY_EMOJI.gift}`)
-    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\``)
-    .setFooter({text:'Ends at'}).setTimestamp(new Date(ends*1000));
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_enter:'+id).setLabel('Enter Giveaway 🎉').setStyle(ButtonStyle.Primary));
-   const msg=await i.reply({embeds:[embed],components:[row],fetchReply:true});
+    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\nReact with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`)
+    .setFooter({text:'React to participate'}).setTimestamp(new Date(ends*1000));
+   const msg=await i.reply({embeds:[embed],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
-   setTimeout(()=>endGiveaway(id).catch(console.error),mins*60000);
+   try { await msg.react(`<a:Winner:${GIVEAWAY_EMOJI_ID}>`); }
+   catch(error) {
+    console.error('Could not add giveaway entry reaction:', error);
+    await msg.reply('I could not add the entry emoji. Please check that I can use external emojis and add reactions.');
+   }
+   setTimeout(()=>endGiveaway(id).catch(console.error),durationMs);
    return;
   }
   if(c==='gend') {
