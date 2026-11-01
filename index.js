@@ -1,7 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials
+  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder
 } = require('discord.js');
 const Database = require('better-sqlite3');
 
@@ -225,6 +225,8 @@ const commands = [
  new SlashCommandBuilder().setName('userinfo').setDescription('Show user information')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('serverinfo').setDescription('Show server information'),
+ new SlashCommandBuilder().setName('servericon').setDescription('Download a server icon using its invite link')
+  .addStringOption(o=>o.setName('invite').setDescription('Discord server invite link').setRequired(true)),
  new SlashCommandBuilder().setName('poll').setDescription('Create yes/no poll')
   .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
  new SlashCommandBuilder().setName('calculator').setDescription('Calculate two numbers')
@@ -599,6 +601,27 @@ client.on('interactionCreate', async i=>{
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
+  if(c==='servericon') {
+   const raw=i.options.getString('invite',true).trim();
+   const match=raw.match(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gg\/|discord(?:app)?\.com\/invite\/)([A-Za-z0-9-]+)/i) || (/^[A-Za-z0-9-]+$/.test(raw)?[raw,raw]:null);
+   if(!match) return i.reply({content:'Please provide a valid Discord invite link or invite code.',ephemeral:true});
+   await i.deferReply();
+   try {
+    const code=match[1];
+    const metaRes=await fetch(`https://discord.com/api/v10/invites/${encodeURIComponent(code)}?with_counts=true`);
+    if(!metaRes.ok) return i.editReply('❌ I could not read that invite. It may be invalid, expired, or unavailable.');
+    const meta=await metaRes.json();
+    if(!meta.guild?.id || !meta.guild?.icon) return i.editReply('❌ This invite did not provide a server icon.');
+    const hash=meta.guild.icon;
+    const ext=hash.startsWith('a_')?'gif':'png';
+    const iconUrl=`https://cdn.discordapp.com/icons/${meta.guild.id}/${hash}.${ext}?size=1024`;
+    const iconRes=await fetch(iconUrl);
+    if(!iconRes.ok) return i.editReply('❌ I found the server, but could not download its icon.');
+    const file=new AttachmentBuilder(Buffer.from(await iconRes.arrayBuffer()),{name:`${meta.guild.id}-icon.${ext}`});
+    const embed=new EmbedBuilder().setColor(0x77DDE7).setTitle(meta.guild.name||'Server Icon').setDescription(`Server ID: \`${meta.guild.id}\`\nIcon Hash: \`${hash}\``).setImage(`attachment://${meta.guild.id}-icon.${ext}`);
+    return i.editReply({embeds:[embed],files:[file]});
+   } catch(error) { console.error('/servericon failed:',error); return i.editReply('❌ Something went wrong while fetching that server icon.'); }
+  }
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
