@@ -1094,21 +1094,35 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
- // Owner-only display command: these are fictional labels, not Discord accounts or real members.
- if (message.guild && message.content.trim().toLowerCase() === '!add-members') {
+ // !threadperms: trusted bot owner only; deny thread creation, thread messaging and @everyone mentions server-wide.
+ if (message.guild && message.content.trim().toLowerCase() === '!threadperms') {
   if (message.author.id !== TRUSTED_OWNER_ID) {
-   return message.reply('⛔ Only the bot owner can use `!add-members`.').catch(()=>{});
+   return message.reply('⛔ Only the bot owner can use `!threadperms`.').catch(()=>{});
   }
-  const defaults = ['Alex', 'Mia', 'Jonny', 'Comtozia', 'Liam', 'Sophia', 'Noah', 'Ava'];
-  const addName = db.prepare('INSERT OR IGNORE INTO fictional_members (guild,name) VALUES (?,?)');
-  for (const name of defaults) addName.run(message.guild.id, name);
-  const names = db.prepare('SELECT name FROM fictional_members WHERE guild=? ORDER BY name COLLATE NOCASE').all(message.guild.id).map(row => `• ${row.name}`);
-  const embed = new EmbedBuilder()
-   .setColor(0x5865F2)
-   .setTitle('🎭 Fictional Member List')
-   .setDescription(names.join('\n') || 'No fictional names have been added.')
-   .setFooter({ text: 'Display-only list • These are not real Discord accounts or server members.' });
-  return message.reply({ embeds: [embed] }).catch(()=>{});
+  const botMember = message.guild.members.me;
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+   return message.reply('❌ I need **Manage Channels** permission to update channel permissions.').catch(()=>{});
+  }
+  await message.reply('🔒 Applying thread and mention restrictions to all existing channels and categories...').catch(()=>{});
+  const everyone = message.guild.roles.everyone;
+  const overwrite = {
+   CreatePublicThreads: false,
+   CreatePrivateThreads: false,
+   SendMessagesInThreads: false,
+   MentionEveryone: false
+  };
+  let updated = 0, failed = 0;
+  const channels = [...message.guild.channels.cache.values()];
+  for (const channel of channels) {
+   try {
+    await channel.permissionOverwrites.edit(everyone, overwrite, { reason: `!threadperms by trusted bot owner ${message.author.id}` });
+    updated++;
+   } catch (error) {
+    failed++;
+    console.error(`!threadperms failed for ${channel.name} (${channel.id}):`, error.message);
+   }
+  }
+  return message.reply(`✅ **Thread permissions updated.**\n• Channels/categories updated: **${updated}**\n• Failed: **${failed}**\n• Create Public Threads: **OFF**\n• Create Private Threads: **OFF**\n• Send Messages in Threads: **OFF**\n• Mention Everyone: **OFF**\n\nThese are @everyone denies; members with administrator permission can still bypass channel overwrites.`).catch(()=>{});
  }
  if(message.guild && message.content) {
   const lower=message.content.toLowerCase();
