@@ -1538,4 +1538,40 @@ To get started, invite Chilly to your server and use **/help** to explore the av
  }
 });
 
+// DM a welcome embed to the member who added Chilly to a server.
+client.on('guildCreate', async guild => {
+ try {
+  // Discord records the person who added the bot in the server audit log.
+  const audit = await guild.fetchAuditLogs({ type: 28, limit: 8 }).catch(() => null); // AuditLogEvent.BotAdd
+  const entry = audit?.entries.find(e =>
+   e.target?.id === client.user.id && Date.now() - e.createdTimestamp < 120000
+  );
+  // If audit-log access is unavailable, the server owner is the safest fallback recipient.
+  const recipient = entry?.executor || await guild.fetchOwner().then(m => m.user).catch(() => null);
+  if (!recipient || recipient.bot) return;
+
+  const embed = new EmbedBuilder()
+   .setColor(0x2878E8)
+   .setTitle('Welcome 👋')
+   .setDescription(
+    `Hi, I'm **${client.user.username}**! Thanks for adding me to your server.\n\n` +
+    `I can help with your server's **leveling, global economy, moderation, security, giveaways, tickets, welcome messages, autoroles, reaction roles, invite tracking, and utility commands**.\n\n` +
+    `Use **/help** to explore my commands and get started!`
+   )
+   .addFields({ name: 'Need help?', value: '[Join the Chilly Support Server](https://discord.gg/TFVrsdNWGx)' })
+   .setFooter({ text: `${guild.name} • Thanks for choosing Chilly!` })
+   .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+   new ButtonBuilder()
+    .setLabel('Join Support Server')
+    .setStyle(ButtonStyle.Link)
+    .setURL('https://discord.gg/TFVrsdNWGx')
+  );
+  await recipient.send({ embeds: [embed], components: [row] });
+ } catch (error) {
+  console.error(`Could not send Chilly welcome DM for ${guild.id}:`, error.message);
+ }
+});
+
 client.login(TOKEN);
