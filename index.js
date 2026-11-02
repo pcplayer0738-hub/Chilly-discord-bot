@@ -17,6 +17,8 @@ if (!TOKEN || !CLIENT_ID) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.MessageContent], partials: [Partials.Message, Partials.Channel, Partials.Reaction] });
 const db = new Database('chilly.sqlite');
 db.exec(`CREATE TABLE IF NOT EXISTS chilly_config (guild TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(guild,key))`);
+db.exec(`CREATE TABLE IF NOT EXISTS leveling_xp (guild TEXT NOT NULL, user TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0, last_message INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild,user))`);
+db.exec(`CREATE TABLE IF NOT EXISTS leveling_rewards (guild TEXT NOT NULL, level INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY(guild,level))`);
 db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
 db.exec(`CREATE TABLE IF NOT EXISTS fictional_members (guild TEXT NOT NULL, name TEXT NOT NULL, created INTEGER DEFAULT (strftime('%s','now')), PRIMARY KEY(guild,name))`);
 db.exec(`
@@ -279,6 +281,21 @@ const commands = [
  new SlashCommandBuilder().setName('setlogs').setDescription('Set moderation and server log channel')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
+ new SlashCommandBuilder().setName('levelup-setup').setDescription('Configure level-up announcements for this server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addChannelOption(o=>o.setName('channel').setDescription('Announcement channel (omit to use the current channel; use off to disable via message option)').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addStringOption(o=>o.setName('message').setDescription('Message tags: {user}, {level}, {xp}').setMaxLength(1000).setRequired(false)),
+ new SlashCommandBuilder().setName('levelrole').setDescription('Configure level-based role rewards')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addSubcommand(sub=>sub.setName('add').setDescription('Give a role at a specific level')
+   .addIntegerOption(o=>o.setName('level').setDescription('Required level').setMinValue(1).setMaxValue(1000).setRequired(true))
+   .addRoleOption(o=>o.setName('role').setDescription('Reward role').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('remove').setDescription('Remove a level reward')
+   .addIntegerOption(o=>o.setName('level').setDescription('Level reward to remove').setMinValue(1).setMaxValue(1000).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('list').setDescription('List configured level rewards')),
+ new SlashCommandBuilder().setName('level').setDescription('View your or another member’s level')
+  .addUserOption(o=>o.setName('member').setDescription('Member to check').setRequired(false)),
+ new SlashCommandBuilder().setName('level-leaderboard').setDescription('Show this server’s top levels'),
  new SlashCommandBuilder().setName('security').setDescription('Enable or disable Chilly security protections')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('feature').setDescription('Protection feature').setRequired(true).addChoices(
@@ -287,6 +304,16 @@ const commands = [
   .addBooleanOption(o=>o.setName('enabled').setDescription('Enable or disable').setRequired(true))
 ].map(c=>c.toJSON());
 
+function xpForNextLevel(level) { return (level * 100) + 75; }
+function levelFromXp(total) {
+ let level=0, remaining=Math.max(0,total);
+ while(remaining>=xpForNextLevel(level) && level<1000) { remaining-=xpForNextLevel(level); level++; }
+ return {level, progress:remaining, required:xpForNextLevel(level)};
+}
+function getLevelRow(guildId,userId) {
+ db.prepare('INSERT OR IGNORE INTO leveling_xp(guild,user,xp,last_message) VALUES(?,?,0,0)').run(guildId,userId);
+ return db.prepare('SELECT * FROM leveling_xp WHERE guild=? AND user=?').get(guildId,userId);
+}
 function account(g,u) {
  db.prepare('INSERT OR IGNORE INTO global_users(user) VALUES(?)').run(u);
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
@@ -601,6 +628,42 @@ client.on('interactionCreate', async i=>{
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
   const target=i.options.getUser('user', false);
+  if(c==='levelup-setup') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',ephemeral:true});
+   const channel=i.options.getChannel('channel');
+   const message=i.options.getString('message');
+   if(channel) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_channel', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,channel.id);
+   if(message) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_message', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,message);
+   if(!channel&&!message) return i.reply({content:'ℹ️ Provide a channel and/or message to update the level-up setup. Use `{user}`, `{level}`, and `{xp}` in the message.',ephemeral:true});
+   return i.reply({content:`✅ Level-up setup updated.${channel?`
+Channel: ${channel}`:''}${message?`
+Message: ${message}`:''}`,ephemeral:true});
+  }
+  if(c==='levelrole') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Roles permission.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   if(sub==='add') {
+    const level=i.options.getInteger('level',true), role=i.options.getRole('role',true);
+    if(role.id===g.id||role.managed||role.position>=g.members.me.roles.highest.position) return i.reply({content:'❌ I cannot assign that role. Move Chilly’s highest role above the reward role.',ephemeral:true});
+    db.prepare('INSERT INTO leveling_rewards(guild,level,role) VALUES(?,?,?) ON CONFLICT(guild,level) DO UPDATE SET role=excluded.role').run(g.id,level,role.id);
+    return i.reply({content:`✅ ${role} will be awarded when a member reaches **Level ${level}**.`,ephemeral:true});
+   }
+   if(sub==='remove') { const level=i.options.getInteger('level',true); const r=db.prepare('DELETE FROM leveling_rewards WHERE guild=? AND level=?').run(g.id,level); return i.reply({content:r.changes?`✅ Removed the Level ${level} reward.`:'No reward was configured for that level.',ephemeral:true}); }
+   const rows=db.prepare('SELECT level,role FROM leveling_rewards WHERE guild=? ORDER BY level').all(g.id);
+   return i.reply({content:rows.length?rows.map(r=>`**Level ${r.level}:** <@&${r.role}>`).join('\n'):'No level rewards configured yet.',ephemeral:true});
+  }
+  if(c==='level') {
+   const member=i.options.getUser('member')||u, row=getLevelRow(g.id,member.id), info=levelFromXp(row.xp);
+   const rank=db.prepare('SELECT COUNT(*)+1 AS rank FROM leveling_xp WHERE guild=? AND xp>?').get(g.id,row.xp).rank;
+   const embed=new EmbedBuilder().setColor(0x77DDE7).setTitle(`🏆 ${member.username} • Level ${info.level}`).setDescription(`**XP:** ${row.xp.toLocaleString()} total\n**Progress:** ${info.progress} / ${info.required} XP\n**Server Rank:** #${rank}`).setThumbnail(member.displayAvatarURL());
+   return i.reply({embeds:[embed]});
+  }
+  if(c==='level-leaderboard') {
+   const rows=db.prepare('SELECT user,xp FROM leveling_xp WHERE guild=? ORDER BY xp DESC LIMIT 10').all(g.id);
+   if(!rows.length) return i.reply({content:'No one has earned XP yet.',ephemeral:true});
+   const lines=rows.map((r,index)=>{const lv=levelFromXp(r.xp).level;return `**${index+1}.** <@${r.user}> — Level **${lv}** (${r.xp.toLocaleString()} XP)`;});
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('🏆 Level Leaderboard').setDescription(lines.join('\n'))]});
+  }
   if(c==='servericon') {
    const raw=i.options.getString('invite',true).trim();
    const match=raw.match(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gg\/|discord(?:app)?\.com\/invite\/)([A-Za-z0-9-]+)/i) || (/^[A-Za-z0-9-]+$/.test(raw)?[raw,raw]:null);
@@ -1179,6 +1242,28 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+ if(message.guild && !message.webhookId && message.content.trim().length >= 2) {
+  const now=Date.now(), row=getLevelRow(message.guild.id,message.author.id);
+  if(now-row.last_message>=60000) {
+   const gain=15+Math.floor(Math.random()*11), before=levelFromXp(row.xp), total=row.xp+gain, after=levelFromXp(total);
+   db.prepare('UPDATE leveling_xp SET xp=?,last_message=? WHERE guild=? AND user=?').run(total,now,message.guild.id,message.author.id);
+   if(after.level>before.level) {
+    const reward=db.prepare('SELECT role FROM leveling_rewards WHERE guild=? AND level=?').get(message.guild.id,after.level);
+    let rewardText='';
+    if(reward) {
+     try {
+      const role=await message.guild.roles.fetch(reward.role);
+      if(role && !role.managed && role.position<message.guild.members.me.roles.highest.position) { await message.member.roles.add(role,'Level reward'); rewardText=` You earned ${role}!`; }
+     } catch(error) { console.error('Level reward assignment failed:',error.message); }
+    }
+    const channelId=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_channel'").get(message.guild.id)?.value;
+    const channel=channelId?await message.guild.channels.fetch(channelId).catch(()=>null):message.channel;
+    const template=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(message.guild.id)?.value || '🎉 {user} reached **Level {level}**!';
+    const content=template.replaceAll('{user}',`<@${message.author.id}>`).replaceAll('{level}',String(after.level)).replaceAll('{xp}',String(total))+rewardText;
+    if(channel?.isTextBased()) await channel.send({content,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+   }
+  }
+ }
  // Owner-only display command: these are fictional labels, not Discord accounts or real members.
  if (message.guild && message.content.trim().toLowerCase() === '!add-members') {
   if (message.author.id !== TRUSTED_OWNER_ID) {
