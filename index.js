@@ -4,6 +4,7 @@ const {
   ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder
 } = require('discord.js');
 const Database = require('better-sqlite3');
+const path = require('node:path');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -1242,6 +1243,45 @@ client.on('guildMemberAdd', async member => {
 
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
+ // Owner-only Coffee & Chill invite event announcement.
+ if(message.guild && message.content.trim().toLowerCase() === '.event') {
+  if(message.author.id !== TRUSTED_OWNER_ID) {
+   return message.reply('⛔ Only the bot owner can use `.event`.').catch(()=>{});
+  }
+  const eventEmbed = new EmbedBuilder()
+   .setColor(0xE53935)
+   .setDescription(`<a:ArrowHeart:1563854239326015589> **INVITE AND EARN** <a:Xieron_stolen_emoji_1788513288:1563854359299625010>
+
+***<:f1logo:1563847827329908817> A new event is here! Bring your friends, grow our community and grab exciting rewards ♡
+
+<a:nitro:1567132488382419035> **𝖱𝖤𝖶𝖠𝖱𝖣𝖲**
+
+<:red_dot:1563849526740127814> 5 Invites — ₹40 INR <a:money_sign:1567134006422798406>
+<:red_dot:1563849526740127814> 10 Invites — Nitro <a:NITRO:1567132437329223701> Basic Acc (for 1 month)
+
+<:rules:1567132632628727880> **𝖱𝖴𝖫𝖤𝖲**
+
+<a:arrow_7:1566815433191985224> Only genuine invites count.
+<a:arrow_7:1566815433191985224> Fake and alt accounts are not allowed.
+<a:arrow_7:1566815433191985224> Invites will be verified by staff.
+
+<a:emoji_2:1566500432941949001> **𝖧𝖮𝖶 𝖳𝖮 𝖢𝖫𝖠𝖨𝖬**
+Open a ticket to claim your reward after reaching the required invites!
+
+<a:senpai_cutie_walk:1566815080547360950> Start inviting and grab your rewards!
+
+Good luck, everyone! ♡***`);
+  try {
+   await message.channel.send({embeds:[eventEmbed]});
+   const posterPath = path.join(__dirname, 'event-poster.png');
+   await message.channel.send({files:[new AttachmentBuilder(posterPath, {name:'coffee-chill-invite-event.png'})]});
+  } catch(error) {
+   console.error('.event command failed:', error);
+   return message.reply('❌ I could not send the event announcement. Check my channel permissions and make sure `event-poster.png` is included with the bot files.').catch(()=>{});
+  }
+  return;
+ }
+
  if(message.guild && !message.webhookId && message.content.trim().length >= 2) {
   const now=Date.now(), row=getLevelRow(message.guild.id,message.author.id);
   if(now-row.last_message>=60000) {
