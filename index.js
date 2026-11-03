@@ -169,7 +169,7 @@ const commands = [
  new SlashCommandBuilder().setName('invites').setDescription('Check your tracked invites')
   .addUserOption(o=>o.setName('user').setDescription('Member to check')),
  new SlashCommandBuilder().setName('invites-leaderboard').setDescription('Top inviters in this server'),
- new SlashCommandBuilder().setName('give').setDescription('Give coins to a member')
+ new SlashCommandBuilder().setName('pay').setDescription('Pay Chilly Coins to a member')
   .addUserOption(o=>o.setName('user').setDescription('Recipient').setRequired(true))
   .addIntegerOption(o=>o.setName('amount').setDescription('Amount').setMinValue(1).setRequired(true)),
  new SlashCommandBuilder().setName('leaderboard').setDescription('Richest members'),
@@ -507,13 +507,6 @@ async function handleGiveawayReaction(reaction, user, add) {
   if (!g || g.ended || g.ends * 1000 <= Date.now()) return;
   if (add) db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(g.id,user.id);
   else db.prepare('DELETE FROM entries WHERE giveaway=? AND user=?').run(g.id,user.id);
-  const count = db.prepare('SELECT COUNT(*) AS n FROM entries WHERE giveaway=?').get(g.id).n;
-  const fresh = await message.fetch().catch(()=>null);
-  if (fresh && fresh.embeds[0]) {
-   const old = fresh.embeds[0];
-   const description = (old.description || '').replace(/(\\*\\*Participants:\\*\\* )\\d+/, '$1' + count);
-   await fresh.edit({embeds:[EmbedBuilder.from(old).setDescription(description)]}).catch(()=>{});
-  }
  } catch (error) {
   console.error('Giveaway reaction handler error:', error);
  }
@@ -590,17 +583,7 @@ client.on('interactionCreate', async i=>{
    const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
    if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
    const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
-   if(r.changes && g.message) {
-    const count=db.prepare('SELECT COUNT(*) AS n FROM entries WHERE giveaway=?').get(id).n;
-    const ch=await client.channels.fetch(g.channel).catch(()=>null);
-    const m=ch?await ch.messages.fetch(g.message).catch(()=>null):null;
-    if(m&&m.embeds[0]) {
-     const old=m.embeds[0];
-     const description=(old.description||'').replace(/(\*\*Participants:\*\* )\d+/, '$1'+count);
-     const updated=EmbedBuilder.from(old).setDescription(description);
-     await m.edit({embeds:[updated],components:m.components}).catch(()=>{});
-    }
-   }
+
    return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
   }
   if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
@@ -608,7 +591,7 @@ client.on('interactionCreate', async i=>{
     aichat:{title:'AI Chat',body:'No AI chat slash command is currently configured in this build.'},
     antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
     automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
-    credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/give` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
+    credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/pay` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
     giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
@@ -840,7 +823,7 @@ Message: ${message}`:''}`,ephemeral:true});
    db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(amount,now,u.id);
    return i.reply('❄️ You earned **'+money(amount)+'**!');
   }
-  if(c==='give') {
+  if(c==='pay') {
    const to=i.options.getUser('user'), amount=i.options.getInteger('amount');
    if(to.bot||to.id===u.id) return i.reply({content:'Choose another non-bot member.',ephemeral:true});
    const a=account(g.id,u.id); account(g.id,to.id);
@@ -849,7 +832,7 @@ Message: ${message}`:''}`,ephemeral:true});
     db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(amount,u.id);
     db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    })();
-   return i.reply('💸 <@'+u.id+'> gave <@'+to.id+'> **'+money(amount)+'**.');
+   return i.reply('💳 | **<@'+u.id+'>** sent **'+amount.toLocaleString('en-US')+' Chilly Coins** to **<@'+to.id+'>**!');
   }
   if(c==='leaderboard') {
    const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all();
@@ -1126,7 +1109,7 @@ Message: ${message}`:''}`,ephemeral:true});
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor((Date.now()+durationMs)/1000);
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
    const embed=new EmbedBuilder().setColor(0x36CFC7).setTitle(`${CHILLY_EMOJI.gift} ${prize} ${CHILLY_EMOJI.gift}`)
-    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Participants:** 0\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\nReact with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`)
+    .setDescription(`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> (<t:${ends}:f>)\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\nReact with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`)
     .setFooter({text:'React to participate'}).setTimestamp(new Date(ends*1000));
    const msg=await i.reply({embeds:[embed],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
