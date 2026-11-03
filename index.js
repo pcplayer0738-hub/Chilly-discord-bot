@@ -1264,6 +1264,7 @@ client.on('messageCreate', async message => {
 <a:arrow_7:1566815433191985224> Only genuine invites count.
 <a:arrow_7:1566815433191985224> Fake and alt accounts are not allowed.
 <a:arrow_7:1566815433191985224> Invites will be verified by staff.
+<a:arrow_7:1566815433191985224> Only new invites will be counted! Old invites are not eligible for rewards.
 
 <a:emoji_2:1566500432941949001> **𝖧𝖮𝖶 𝖳𝖮 𝖢𝖫𝖠𝖨𝖬**
 Open a ticket to claim your reward after reaching the required invites!
