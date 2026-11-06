@@ -547,16 +547,39 @@ client.on('interactionCreate', async i=>{
    const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_role')?.value;
    const categoryId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_category')?.value;
    const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}];
-   if(roleId) perms.push({id:roleId,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]});
+   if(roleId) perms.push({id:roleId,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]});
    const ch=await i.guild.channels.create({name:`ticket-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}`,parent:categoryId||undefined,permissionOverwrites:perms});
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send({content:`🎫 ${i.user} <@&${roleId||i.guild.id}>`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('Support Ticket').setDescription('Please describe your issue. A staff member will assist you.')],components:[row]});
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+   await ch.send({content:`🎫 ${i.user} ${roleId?`<@&${roleId}>`:''}`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('Support Ticket').setDescription(`Please describe your issue. A staff member will assist you.\n\n**Staff:** A staff member must claim this ticket before messaging. Only the claiming staff member can chat and close it.`)],components:[row]});
    return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
   }
+  if(i.isButton()&&i.customId==='chilly_ticket_claim') {
+   const topic=i.channel?.topic||'';
+   const match=topic.match(/^chilly-ticket:(\d+)(?::(\d+))?(?::(\d+))?$/);
+   if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
+   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_role')?.value;
+   const isStaff=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator)||!!(roleId&&i.member.roles.cache.has(roleId));
+   if(!isStaff) return i.reply({content:'Only assigned staff members can claim tickets.',ephemeral:true});
+   if(match[3]) return i.reply({content:`This ticket has already been claimed by <@${match[3]}>.`,ephemeral:true});
+   await i.channel.permissionOverwrites.edit(i.user.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true});
+   if(roleId) await i.channel.permissionOverwrites.edit(roleId,{ViewChannel:true,ReadMessageHistory:true,SendMessages:false});
+   await i.channel.setTopic(`chilly-ticket:${match[1]}:${roleId||''}:${i.user.id}`);
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claimed').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(true),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+   await i.update({components:[row]});
+   await i.channel.send(`✅ This ticket has been claimed by ${i.user}. Only this staff member can message and close the ticket.`);
+   return;
+  }
   if(i.isButton()&&i.customId==='chilly_ticket_close') {
-   const isOwner=i.guild&&i.user.id===i.guild.ownerId;
-   if(!isOwner&&!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels)&&!i.channel.topic?.includes(`chilly-ticket:${i.user.id}`)) return i.reply({content:'Only the ticket creator or staff can close this ticket.',ephemeral:true});
-   await i.reply({content:'🔒 Closing ticket in 3 seconds…',ephemeral:true}); setTimeout(()=>i.channel.delete('Ticket closed').catch(()=>{}),3000); return;
+   const topic=i.channel?.topic||'';
+   const match=topic.match(/^chilly-ticket:(\d+)(?::(\d+))?(?::(\d+))?$/);
+   if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
+   const openerId=match[1], claimerId=match[3];
+   const isAdmin=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
+   if(!claimerId) return i.reply({content:'A staff member must claim this ticket before it can be closed.',ephemeral:true});
+   if(i.user.id!==claimerId&&!isAdmin) return i.reply({content:'Only the staff member who claimed this ticket or a Server Administrator can close it.',ephemeral:true});
+   await i.reply({content:'🔒 Closing ticket in 3 seconds…',ephemeral:true});
+   setTimeout(()=>i.channel.delete(`Ticket closed by ${i.user.tag}; opened by ${openerId}`).catch(()=>{}),3000);
+   return;
   }
   if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
    const [,gameId,choice]=i.customId.split(':'); const game=rpsGames.get(gameId);
@@ -602,7 +625,7 @@ client.on('interactionCreate', async i=>{
     reset:{title:'Reset',body:'No reset command is currently configured in this build.'},
     responders:{title:'Responders',body:'Responder commands are not currently configured in this build.'},
     tickets:{title:'Tickets',body:'`/ticket-setup` — Customize panel channel, title, description and support role. Use the Create Ticket button to open private tickets.'},
-    utility:{title:'Utility',body:'`/avatar` · `/userinfo` · `/serverinfo` · `/calculator` · `/invites` · `/invites-leaderboard`'},
+    utility:{title:'Utility',body:'`/avatar` · `/userinfo` · `/serverinfo` · `/calculator`'},
     vchelp:{title:'VC Help',body:'Music commands registered: `/play` · `/skip` · `/pause` · `/resume` · `/stop` · `/queue` · `/leave`. YouTube playback still needs voice provider integration.'},
     welcomer:{title:'Welcomer',body:'`/welcome-setup` — Set the welcome channel and message. Placeholders: `{user}` and `{server}`.'}
    };
@@ -789,7 +812,6 @@ Message: ${message}`:''}`,ephemeral:true});
     {label:'Responders',description:'Automatic responders',value:'responders',emoji:red},
     {label:'tickets',description:'Ticket tools',value:'tickets',emoji:red},
     {label:'utility',description:'Utility commands',value:'utility',emoji:red},
-    {label:'vchelp',description:'Voice channel help',value:'vchelp',emoji:red},
     {label:'Welcomer',description:'Welcome tools',value:'welcomer',emoji:red}
    );
    return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setAuthor({name:'Chilly • Help Center',iconURL:client.user.displayAvatarURL()}).setTitle('<:F1:1565221539844989060> Chilly Help').setDescription('Browse all available Chilly commands by category.\n\n<:Redtick:1565221545453027339> **Categories**\nSelect a category below to view its commands.').setFooter({text:'Chilly Bot • Powered by Spidyyy'})],components:[new ActionRowBuilder().addComponents(menu)]});
