@@ -242,6 +242,9 @@ const commands = [
  new SlashCommandBuilder().setName('serverinfo').setDescription('Show server information'),
  new SlashCommandBuilder().setName('servericon').setDescription('Download a server icon using its invite link')
   .addStringOption(o=>o.setName('invite').setDescription('Discord server invite link').setRequired(true)),
+ new SlashCommandBuilder().setName('server-copy').setDescription('Copy roles, permissions, categories and channels from another server')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addStringOption(o=>o.setName('source-server-id').setDescription('Server ID of the source server (Chilly must be in it)').setMinLength(17).setMaxLength(20).setRequired(true)),
  new SlashCommandBuilder().setName('poll').setDescription('Create yes/no poll')
   .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
  new SlashCommandBuilder().setName('calculator').setDescription('Calculate two numbers')
@@ -553,6 +556,86 @@ async function stealFromSourceMessage(guild, sourceMessage) {
 
 client.on('interactionCreate', async i=>{
  try {
+  if(i.isButton() && i.customId==='chilly_servercopy_cancel') return i.update({content:'Server copy cancelled.',components:[]});
+  if(i.isButton() && i.customId.startsWith('chilly_servercopy_confirm:')) {
+   const sourceId=i.customId.split(':')[1];
+   const dest=i.guild;
+   if(!dest) return i.reply({content:'Use this button inside the destination server.',ephemeral:true});
+   const allowed=i.user.id===dest.ownerId || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
+   if(!allowed) return i.reply({content:'⛔ Only the destination server owner, Administrator, or Manage Server members can confirm this copy.',ephemeral:true});
+   if(sourceId===dest.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   const source=await client.guilds.fetch(sourceId).catch(()=>null);
+   if(!source) return i.editReply('❌ Chilly must be a member of the source server, and the source server ID must be correct.');
+   const botMember=await dest.members.fetchMe().catch(()=>null);
+   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return i.editReply('❌ Chilly needs **Manage Roles** and **Manage Channels** permissions in this destination server.');
+   const sourceRoles=await source.roles.fetch();
+   const sourceChannels=await source.channels.fetch();
+   const roleMap=new Map([[source.id,dest.id]]);
+   let rolesCreated=0, channelsCreated=0, skipped=0;
+   // Create roles from lowest to highest, excluding @everyone and integration/bot-managed roles.
+   const roles=[...sourceRoles.values()].filter(r=>r.id!==source.id&&!r.managed).sort((a,b)=>a.position-b.position);
+   for(const role of roles) {
+    try {
+     const made=await dest.roles.create({name:role.name,color:role.color,hoist:role.hoist,mentionable:role.mentionable,permissions:role.permissions.bitfield,reason:`Server structure copied from ${source.name} using Chilly`});
+     roleMap.set(role.id,made.id); rolesCreated++;
+    } catch(err) { skipped++; console.warn('Server-copy role skipped:',role.name,err.message); }
+   }
+   // Reproduce role order after creation; Discord may adjust positions around managed roles.
+   for(const role of roles) {
+    const mapped=roleMap.get(role.id); if(!mapped) continue;
+    try { const sourceRole=sourceRoles.get(role.id); await dest.roles.cache.get(mapped)?.setPosition(Math.max(1,sourceRole.position),{reason:'Preserve source role order'}); } catch {}
+   }
+   const mapOverwrites=async(channel)=>{
+    const out=[];
+    for(const ow of channel.permissionOverwrites.cache.values()) {
+     let id=null;
+     if(ow.type===0) id=roleMap.get(ow.id)||null;
+     else {
+      const member=await dest.members.fetch(ow.id).catch(()=>null);
+      if(member) id=member.id;
+     }
+     if(!id) continue;
+     out.push({id,type:ow.type,allow:ow.allow.bitfield,deny:ow.deny.bitfield});
+    }
+    return out;
+   };
+   const channels=[...sourceChannels.values()].filter(ch=>!ch.isThread()).sort((a,b)=>{
+    if(a.type===ChannelType.GuildCategory&&b.type!==ChannelType.GuildCategory) return -1;
+    if(b.type===ChannelType.GuildCategory&&a.type!==ChannelType.GuildCategory) return 1;
+    if((a.parent?.position??-1)!==(b.parent?.position??-1)) return (a.parent?.position??-1)-(b.parent?.position??-1);
+    return a.position-b.position;
+   });
+   const channelMap=new Map();
+   for(const ch of channels.filter(x=>x.type===ChannelType.GuildCategory)) {
+    try {
+     const overwrites=await mapOverwrites(ch);
+     const made=await dest.channels.create({name:ch.name,type:ChannelType.GuildCategory,permissionOverwrites:overwrites,reason:`Server structure copied from ${source.name} using Chilly`});
+     channelMap.set(ch.id,made.id); channelsCreated++;
+    } catch(err) { skipped++; console.warn('Server-copy category skipped:',ch.name,err.message); }
+   }
+   const supported=new Set([ChannelType.GuildText,ChannelType.GuildAnnouncement,ChannelType.GuildVoice,ChannelType.GuildStageVoice,ChannelType.GuildForum,ChannelType.GuildMedia]);
+   for(const ch of channels.filter(x=>x.type!==ChannelType.GuildCategory)) {
+    if(!supported.has(ch.type)) { skipped++; continue; }
+    try {
+     const overwrites=await mapOverwrites(ch);
+     const options={name:ch.name,type:ch.type,permissionOverwrites:overwrites,reason:`Server structure copied from ${source.name} using Chilly`};
+     const parentId=ch.parentId?channelMap.get(ch.parentId):null; if(parentId) options.parent=parentId;
+     if(ch.topic!==null&&ch.topic!==undefined) options.topic=ch.topic;
+     if('nsfw' in ch) options.nsfw=ch.nsfw;
+     if(ch.rateLimitPerUser!==undefined) options.rateLimitPerUser=ch.rateLimitPerUser;
+     if(ch.type===ChannelType.GuildVoice||ch.type===ChannelType.GuildStageVoice) {
+      if(ch.bitrate) options.bitrate=Math.min(ch.bitrate,dest.maximumBitrate||ch.bitrate);
+      if(ch.userLimit!==undefined) options.userLimit=ch.userLimit;
+      if(ch.rtcRegion) options.rtcRegion=ch.rtcRegion;
+     }
+     if(ch.defaultAutoArchiveDuration) options.defaultAutoArchiveDuration=ch.defaultAutoArchiveDuration;
+     const made=await dest.channels.create(options);
+     channelMap.set(ch.id,made.id); channelsCreated++;
+    } catch(err) { skipped++; console.warn('Server-copy channel skipped:',ch.name,err.message); }
+   }
+   return i.editReply(`✅ **Server copy finished!**\nSource: **${source.name}**\nDestination: **${dest.name}**\n• Roles created: **${rolesCreated}**\n• Categories and channels created: **${channelsCreated}**\n• Skipped (unsupported types, missing member overwrites, or Discord limits): **${skipped}**\n\nExisting destination roles and channels were not deleted.`);
+  }
   if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
    const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
    const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
@@ -782,6 +865,22 @@ Message: ${message}`:''}`,ephemeral:true});
    db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    const updated=account(g.id,to.id);
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
+  }
+  if(c==='server-copy') {
+   const allowed=u.id===g.ownerId || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
+   if(!allowed) return i.reply({content:'⛔ Only the server owner, Administrator, or Manage Server members can use /server-copy.',ephemeral:true});
+   const sourceId=i.options.getString('source-server-id',true).trim();
+   if(!/^\d{17,20}$/.test(sourceId)) return i.reply({content:'Please provide a valid source server ID.',ephemeral:true});
+   if(sourceId===g.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
+   const source=await client.guilds.fetch(sourceId).catch(()=>null);
+   if(!source) return i.reply({content:'❌ Chilly must be a member of the source server. Check the server ID and invite Chilly to that server first.',ephemeral:true});
+   const [roles,channels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
+   const roleCount=[...roles.values()].filter(r=>r.id!==source.id&&!r.managed).length;
+   const channelList=[...channels.values()].filter(ch=>!ch.isThread());
+   const categoryCount=channelList.filter(ch=>ch.type===ChannelType.GuildCategory).length;
+   const channelCount=channelList.length-categoryCount;
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`chilly_servercopy_confirm:${source.id}`).setLabel('Confirm Copy').setEmoji('📋').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('chilly_servercopy_cancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary));
+   return i.reply({content:`**Server copy preview**\nSource: **${source.name}** (\`${source.id}\`)\nDestination: **${g.name}**\n• Roles (excluding @everyone and managed roles): **${roleCount}**\n• Categories: **${categoryCount}**\n• Channels: **${channelCount}**\n• Role permissions and channel permission overwrites: **Included**\n\nChilly will create these in the destination without deleting existing roles or channels. Member-specific overwrites are copied only for members already in the destination server. Confirm to continue.`,components:[row],ephemeral:true});
   }
   if(c==='ticket-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Only members with Administrator permission can configure tickets.',ephemeral:true});
