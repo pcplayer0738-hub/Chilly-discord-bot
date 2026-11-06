@@ -18,6 +18,9 @@ if (!TOKEN || !CLIENT_ID) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.MessageContent], partials: [Partials.Message, Partials.Channel, Partials.Reaction] });
 const db = new Database('chilly.sqlite');
 db.exec(`CREATE TABLE IF NOT EXISTS chilly_config (guild TEXT NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(guild,key))`);
+db.exec(`CREATE TABLE IF NOT EXISTS ticket_buttons (guild TEXT NOT NULL, ticket_key TEXT NOT NULL, label TEXT NOT NULL, emoji TEXT, staff_role TEXT NOT NULL, log_channel TEXT NOT NULL, PRIMARY KEY(guild,ticket_key))`);
+// Preserve the legacy single-button ticket setup for existing servers and panels.
+db.exec(`INSERT OR IGNORE INTO ticket_buttons(guild,ticket_key,label,emoji,staff_role,log_channel) SELECT c.guild,'default','Create Ticket','🎫',r.value,c.value FROM chilly_config c JOIN chilly_config r ON r.guild=c.guild AND r.key='ticket_role' WHERE c.key='ticket_channel'`);
 db.exec(`CREATE TABLE IF NOT EXISTS leveling_xp (guild TEXT NOT NULL, user TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0, last_message INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild,user))`);
 db.exec(`CREATE TABLE IF NOT EXISTS leveling_rewards (guild TEXT NOT NULL, level INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY(guild,level))`);
 db.exec(`CREATE TABLE IF NOT EXISTS whitelist (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, added_by TEXT, created INTEGER, PRIMARY KEY (guild, kind, target))`);
@@ -112,12 +115,21 @@ ensureColumn('entries', 'giveaway', 'TEXT');
 ensureColumn('entries', 'user', 'TEXT');
 
 const commands = [
- new SlashCommandBuilder().setName('ticket-setup').setDescription('Customize the ticket panel for this server')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addChannelOption(o=>o.setName('channel').setDescription('Panel channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
-  .addRoleOption(o=>o.setName('support_role').setDescription('Role that can see tickets').setRequired(true))
-  .addStringOption(o=>o.setName('title').setDescription('Panel title').setMaxLength(200).setRequired(true))
-  .addStringOption(o=>o.setName('description').setDescription('Panel description').setMaxLength(1000).setRequired(true)),
+ new SlashCommandBuilder().setName('ticket-setup').setDescription('Configure custom ticket buttons and panels')
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  .addSubcommand(sub=>sub.setName('add-button').setDescription('Add a custom ticket button')
+   .addStringOption(o=>o.setName('key').setDescription('Unique short key, e.g. support').setMaxLength(30).setRequired(true))
+   .addStringOption(o=>o.setName('name').setDescription('Text shown on the ticket button').setMaxLength(80).setRequired(true))
+   .addRoleOption(o=>o.setName('staff-role').setDescription('Staff role for this ticket type').setRequired(true))
+   .addChannelOption(o=>o.setName('log-channel').setDescription('Log channel for this ticket type').addChannelTypes(ChannelType.GuildText).setRequired(true))
+   .addStringOption(o=>o.setName('emoji').setDescription('Optional button emoji').setMaxLength(100).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('remove-button').setDescription('Remove a ticket button')
+   .addStringOption(o=>o.setName('key').setDescription('Button key to remove').setMaxLength(30).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('list-buttons').setDescription('List configured ticket buttons'))
+  .addSubcommand(sub=>sub.setName('panel').setDescription('Post a panel with all configured ticket buttons')
+   .addChannelOption(o=>o.setName('channel').setDescription('Panel channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
+   .addStringOption(o=>o.setName('title').setDescription('Panel title').setMaxLength(200).setRequired(true))
+   .addStringOption(o=>o.setName('description').setDescription('Panel description').setMaxLength(1000).setRequired(true))),
  new SlashCommandBuilder().setName('welcome-setup').setDescription('Configure welcome messages for this server')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Welcome channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
@@ -541,44 +553,49 @@ async function stealFromSourceMessage(guild, sourceMessage) {
 
 client.on('interactionCreate', async i=>{
  try {
-  if(i.isButton()&&i.customId==='chilly_ticket_open') {
-   const existing=i.guild.channels.cache.find(ch=>ch.type===ChannelType.GuildText && ch.topic===`chilly-ticket:${i.user.id}`);
-   if(existing) return i.reply({content:`You already have a ticket: ${existing}`,ephemeral:true});
-   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_role')?.value;
-   const categoryId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_category')?.value;
-   const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]}];
-   if(roleId) perms.push({id:roleId,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]});
-   const ch=await i.guild.channels.create({name:`ticket-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}`,parent:categoryId||undefined,permissionOverwrites:perms});
+  if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
+   const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
+   const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
+   if(!config) return i.reply({content:'This ticket button is no longer configured.',ephemeral:true});
+   const existing=i.guild.channels.cache.find(ch=>ch.type===ChannelType.GuildText && ch.topic?.startsWith(`chilly-ticket:${i.user.id}:${ticketKey}:`));
+   if(existing) return i.reply({content:`You already have this ticket: ${existing}`,ephemeral:true});
+   const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
+   const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send({content:`🎫 ${i.user} ${roleId?`<@&${roleId}>`:''}`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('Support Ticket').setDescription(`Please describe your issue. A staff member will assist you.\n\n**Staff:** A staff member must claim this ticket before messaging. Only the claiming staff member can chat and close it.`)],components:[row]});
+   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(`${config.label} Ticket`).setDescription('Please describe your issue. A staff member must claim this ticket before messaging. Only the claiming staff member can chat and close it.')],components:[row]});
    return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
   }
   if(i.isButton()&&i.customId==='chilly_ticket_claim') {
    const topic=i.channel?.topic||'';
-   const match=topic.match(/^chilly-ticket:(\d+)(?::(\d+))?(?::(\d+))?$/);
+   const match=topic.match(/^chilly-ticket:(\d+):([^:]+):(\d+):?(\d*)$/);
    if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
-   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(i.guild.id,'ticket_role')?.value;
-   const isStaff=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator)||!!(roleId&&i.member.roles.cache.has(roleId));
-   if(!isStaff) return i.reply({content:'Only assigned staff members can claim tickets.',ephemeral:true});
-   if(match[3]) return i.reply({content:`This ticket has already been claimed by <@${match[3]}>.`,ephemeral:true});
+   const [,openerId,ticketKey,roleId,claimerId]=match;
+   const isStaff=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator)||!!i.member.roles.cache.has(roleId);
+   if(!isStaff) return i.reply({content:'Only this ticket type’s assigned staff members can claim it.',ephemeral:true});
+   if(claimerId) return i.reply({content:`This ticket has already been claimed by <@${claimerId}>.`,ephemeral:true});
    await i.channel.permissionOverwrites.edit(i.user.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true});
-   if(roleId) await i.channel.permissionOverwrites.edit(roleId,{ViewChannel:true,ReadMessageHistory:true,SendMessages:false});
-   await i.channel.setTopic(`chilly-ticket:${match[1]}:${roleId||''}:${i.user.id}`);
+   await i.channel.permissionOverwrites.edit(roleId,{ViewChannel:true,ReadMessageHistory:true,SendMessages:false});
+   await i.channel.setTopic(`chilly-ticket:${openerId}:${ticketKey}:${roleId}:${i.user.id}`);
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claimed').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(true),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
    await i.update({components:[row]});
    await i.channel.send(`✅ This ticket has been claimed by ${i.user}. Only this staff member can message and close the ticket.`);
    return;
   }
   if(i.isButton()&&i.customId==='chilly_ticket_close') {
-   const topic=i.channel?.topic||'';
-   const match=topic.match(/^chilly-ticket:(\d+)(?::(\d+))?(?::(\d+))?$/);
-   if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
-   const openerId=match[1], claimerId=match[3];
+   const match=(i.channel?.topic||'').match(/^chilly-ticket:(\d+):([^:]+):(\d+):(\d+)$/);
+   if(!match) return i.reply({content:'This is not a valid or claimed Chilly ticket.',ephemeral:true});
+   const [,openerId,ticketKey,roleId,claimerId]=match;
    const isAdmin=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
-   if(!claimerId) return i.reply({content:'A staff member must claim this ticket before it can be closed.',ephemeral:true});
    if(i.user.id!==claimerId&&!isAdmin) return i.reply({content:'Only the staff member who claimed this ticket or a Server Administrator can close it.',ephemeral:true});
-   await i.reply({content:'🔒 Closing ticket in 3 seconds…',ephemeral:true});
-   setTimeout(()=>i.channel.delete(`Ticket closed by ${i.user.tag}; opened by ${openerId}`).catch(()=>{}),3000);
+   const config=db.prepare('SELECT log_channel FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
+   await i.reply({content:'🔒 Closing ticket…',ephemeral:true});
+   try {
+    const messages=await i.channel.messages.fetch({limit:100});
+    const transcript=[...messages.values()].reverse().map(m=>`[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${m.cleanContent}`).join('\n');
+    const log=i.guild.channels.cache.get(config?.log_channel);
+    if(log) await log.send({content:`🔒 Ticket **${ticketKey}** closed by ${i.user} (claimed by <@${claimerId}>; opened by <@${openerId}>).`,files:[new AttachmentBuilder(Buffer.from(transcript||'No messages.'),{name:`ticket-${ticketKey}-${openerId}.txt`})]});
+   } catch(err) { console.error('Ticket transcript/log error:',err); }
+   setTimeout(()=>i.channel.delete(`Ticket closed by ${i.user.tag}; opened by ${openerId}`).catch(()=>{}),1500);
    return;
   }
   if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
@@ -767,12 +784,34 @@ Message: ${message}`:''}`,ephemeral:true});
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
   }
   if(c==='ticket-setup') {
-   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
-   const ch=i.options.getChannel('channel'), role=i.options.getRole('support_role'), title=i.options.getString('title'), desc=i.options.getString('description');
-   for(const [k,v] of Object.entries({ticket_channel:ch.id,ticket_role:role.id,ticket_title:title,ticket_description:desc})) db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,k,v);
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_open').setLabel('Create Ticket').setEmoji('🎫').setStyle(ButtonStyle.Primary));
-   await ch.send({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(title).setDescription(desc)],components:[row]});
-   return i.reply({content:'✅ Ticket panel saved and posted. Customize it again with /ticket-setup.',ephemeral:true});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Only members with Administrator permission can configure tickets.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   if(sub==='add-button') {
+    const key=i.options.getString('key').toLowerCase().replace(/[^a-z0-9_-]/g,'-');
+    const label=i.options.getString('name'), role=i.options.getRole('staff-role'), log=i.options.getChannel('log-channel'), emoji=i.options.getString('emoji');
+    db.prepare('INSERT INTO ticket_buttons(guild,ticket_key,label,emoji,staff_role,log_channel) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,ticket_key) DO UPDATE SET label=excluded.label,emoji=excluded.emoji,staff_role=excluded.staff_role,log_channel=excluded.log_channel').run(g.id,key,label,emoji,role.id,log.id);
+    return i.reply({content:`✅ Ticket button **${label}** saved. Key: \`${key}\`
+Staff: <@&${role.id}>
+Logs: <#${log.id}>`,ephemeral:true});
+   }
+   if(sub==='remove-button') {
+    const key=i.options.getString('key').toLowerCase(); const result=db.prepare('DELETE FROM ticket_buttons WHERE guild=? AND ticket_key=?').run(g.id,key);
+    return i.reply({content:result.changes?'✅ Ticket button removed.':'No button found with that key.',ephemeral:true});
+   }
+   if(sub==='list-buttons') {
+    const rows=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? ORDER BY ticket_key').all(g.id);
+    return i.reply({content:rows.length?rows.map(x=>`• **${x.label}** (\`${x.ticket_key}\`) — Staff: <@&${x.staff_role}> — Logs: <#${x.log_channel}>`).join('\n'):'No ticket buttons configured yet.',ephemeral:true});
+   }
+   if(sub==='panel') {
+    const buttons=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? ORDER BY ticket_key').all(g.id);
+    if(!buttons.length) return i.reply({content:'Add at least one button first using `/ticket-setup add-button`.',ephemeral:true});
+    if(buttons.length>25) return i.reply({content:'Discord panels support up to 25 ticket buttons. Remove some buttons first.',ephemeral:true});
+    const rows=[];
+    for(let n=0;n<buttons.length;n+=5) rows.push(new ActionRowBuilder().addComponents(buttons.slice(n,n+5).map(b=>{const btn=new ButtonBuilder().setCustomId(`chilly_ticket_open:${b.ticket_key}`).setLabel(b.label).setStyle(ButtonStyle.Primary); if(b.emoji) btn.setEmoji(b.emoji); return btn;})));
+    const channel=i.options.getChannel('channel');
+    await channel.send({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(i.options.getString('title')).setDescription(i.options.getString('description'))],components:rows});
+    return i.reply({content:`✅ Ticket panel posted in ${channel} with ${buttons.length} custom button(s).`,ephemeral:true});
+   }
   }
   if(c==='welcome-setup') {
    if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
