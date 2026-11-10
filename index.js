@@ -1414,8 +1414,8 @@ client.on('messageCreate', async message => {
      .setColor(0xE0A526)
      .setTitle('⚠️ Private server channel reset')
      .setDescription(
-      `Server: **${guild.name}**\\n`+
-      `Channels/categories currently present: **${guild.channels.cache.size}**\\n\\n`+
+      `Server: **${guild.name}**\n`+
+      `Channels/categories currently present: **${guild.channels.cache.size}**\n\n`+
       'Confirming will permanently delete all channels and categories in this server. **Members and roles will remain untouched.**\\n\\n'+
       `To confirm within 5 minutes, reply in this DM with:\n.spdy confirm ${guild.id}\n\n`+
       'To cancel, do not send the confirmation.'
@@ -1431,9 +1431,9 @@ client.on('messageCreate', async message => {
  }
 
  // Confirmation is accepted only in the bot-owner's DM, never in a server channel.
- if(!message.guild && /^\\.spdy\\s+confirm\\s+\\d{17,20}$/i.test(privateCommand)) {
+ if(!message.guild && /^\.spdy\s+confirm\s+\d{17,20}$/i.test(privateCommand)) {
   if(message.author.id !== TRUSTED_OWNER_ID) return;
-  const guildId = privateCommand.split(/\\s+/)[2];
+  const guildId = privateCommand.split(/\s+/)[2];
   const pendingKey = `${message.author.id}:${guildId}`;
   const expiresAt = pendingSpdyResets.get(pendingKey);
   if(!expiresAt || expiresAt < Date.now()) {
@@ -1471,8 +1471,8 @@ client.on('messageCreate', async message => {
    }
   }
   return message.author.send(
-   `🗑️ **Channel reset finished for ${guild.name}.**\\n`+
-   `• Deleted: **${deleted}**\\n• Failed: **${failed}**\\n`+
+   `🗑️ **Channel reset finished for ${guild.name}.**\n`+
+   `• Deleted: **${deleted}**\n• Failed: **${failed}**\n`+
    '• Members and roles: **not changed**'
   ).catch(()=>{});
   }
