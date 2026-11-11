@@ -565,12 +565,24 @@ client.on('interactionCreate', async i=>{
    if(!allowed) return i.reply({content:'⛔ Only the destination server owner, Administrator, or Manage Server members can confirm this copy.',ephemeral:true});
    if(sourceId===dest.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
    await i.deferReply({ephemeral:true});
-   const source=await client.guilds.fetch(sourceId).catch(()=>null);
-   if(!source) return i.editReply('❌ Chilly must be a member of the source server, and the source server ID must be correct.');
-   const botMember=await dest.members.fetchMe().catch(()=>null);
-   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return i.editReply('❌ Chilly needs **Manage Roles** and **Manage Channels** permissions in this destination server.');
-   const sourceRoles=await source.roles.fetch();
-   const sourceChannels=await source.channels.fetch();
+   const source=client.guilds.cache.get(sourceId) || await client.guilds.fetch(sourceId).catch(error=>{
+    console.error('Server-copy source fetch failed:',error);
+    return null;
+   });
+   if(!source) return i.editReply('❌ I could not access the source server. Make sure Chilly is still a member of that server and that the Server ID is correct.');
+   const [botMember,sourceBotMember]=await Promise.all([
+    dest.members.fetchMe().catch(()=>null),
+    source.members.fetchMe().catch(()=>null)
+   ]);
+   if(!sourceBotMember) return i.editReply('❌ Chilly is not available as a member in the source server. Re-invite the same bot to the source server, then try again.');
+   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return i.editReply('❌ In the **destination server**, give Chilly **Manage Roles** and **Manage Channels** permissions, then try again.');
+   let sourceRoles,sourceChannels;
+   try {
+    [sourceRoles,sourceChannels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
+   } catch(error) {
+    console.error('Server-copy source data fetch failed:',error);
+    return i.editReply(`❌ I found **${source.name}**, but could not read its roles/channels. Check that Chilly is still in the source server and try again.\nError: \`${error.code || error.message || 'Unknown API error'}\``);
+   }
    const roleMap=new Map([[source.id,dest.id]]);
    let rolesCreated=0, channelsCreated=0, skipped=0;
    // Create roles from lowest to highest, excluding @everyone and integration/bot-managed roles.
@@ -872,15 +884,27 @@ Message: ${message}`:''}`,ephemeral:true});
    const sourceId=i.options.getString('source-server-id',true).trim();
    if(!/^\d{17,20}$/.test(sourceId)) return i.reply({content:'Please provide a valid source server ID.',ephemeral:true});
    if(sourceId===g.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
-   const source=await client.guilds.fetch(sourceId).catch(()=>null);
-   if(!source) return i.reply({content:'❌ Chilly must be a member of the source server. Check the server ID and invite Chilly to that server first.',ephemeral:true});
-   const [roles,channels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
+   await i.deferReply({ephemeral:true});
+   const source=client.guilds.cache.get(sourceId) || await client.guilds.fetch(sourceId).catch(error=>{
+    console.error('Server-copy preview source fetch failed:',error);
+    return null;
+   });
+   if(!source) return i.editReply('❌ I could not access the source server. Make sure Chilly is a member of that server and that the Server ID is correct.');
+   const sourceBotMember=await source.members.fetchMe().catch(()=>null);
+   if(!sourceBotMember) return i.editReply('❌ Chilly is not available in the source server. Re-invite the same bot to the source server, then try again.');
+   let roles,channels;
+   try {
+    [roles,channels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
+   } catch(error) {
+    console.error('Server-copy preview data fetch failed:',error);
+    return i.editReply(`❌ I found **${source.name}**, but could not read its roles/channels. Check Chilly's access in the source server.\nError: \`${error.code || error.message || 'Unknown API error'}\``);
+   }
    const roleCount=[...roles.values()].filter(r=>r.id!==source.id&&!r.managed).length;
    const channelList=[...channels.values()].filter(ch=>!ch.isThread());
    const categoryCount=channelList.filter(ch=>ch.type===ChannelType.GuildCategory).length;
    const channelCount=channelList.length-categoryCount;
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`chilly_servercopy_confirm:${source.id}`).setLabel('Confirm Copy').setEmoji('📋').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('chilly_servercopy_cancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary));
-   return i.reply({content:`**Server copy preview**\nSource: **${source.name}** (\`${source.id}\`)\nDestination: **${g.name}**\n• Roles (excluding @everyone and managed roles): **${roleCount}**\n• Categories: **${categoryCount}**\n• Channels: **${channelCount}**\n• Role permissions and channel permission overwrites: **Included**\n\nChilly will create these in the destination without deleting existing roles or channels. Member-specific overwrites are copied only for members already in the destination server. Confirm to continue.`,components:[row],ephemeral:true});
+   return i.editReply({content:`**Server copy preview**\nSource: **${source.name}** (\`${source.id}\`)\nDestination: **${g.name}**\n• Roles (excluding @everyone and managed roles): **${roleCount}**\n• Categories: **${categoryCount}**\n• Channels: **${channelCount}**\n• Role permissions and channel permission overwrites: **Included**\n\nChilly will create these in the destination without deleting existing roles or channels. Member-specific overwrites are copied only for members already in the destination server. Press **Confirm Copy** to continue.`,components:[row]});
   }
   if(c==='ticket-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Only members with Administrator permission can configure tickets.',ephemeral:true});
