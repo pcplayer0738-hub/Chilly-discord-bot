@@ -173,6 +173,7 @@ const commands = [
  new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
  new SlashCommandBuilder().setName('bank').setDescription('View your global Chilly Bank account'),
+ new SlashCommandBuilder().setName('tax').setDescription('View full Chilly daily tax rules'),
  new SlashCommandBuilder().setName('deposit').setDescription('Deposit wallet coins into your global bank')
   .addIntegerOption(o=>o.setName('amount').setDescription('Amount to deposit').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('withdraw').setDescription('Withdraw coins from your global bank')
@@ -332,11 +333,15 @@ function account(g,u) {
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
 }
 
-// Global daily wealth tax: users with at least 100,000 coins pay 1,000 coins.
-// The last-run timestamp is persisted in SQLite so restarts do not reset the 24h timer.
-const DAILY_COIN_TAX_THRESHOLD = 100000;
-const DAILY_COIN_TAX_AMOUNT = 1000;
+// Global daily progressive wallet + bank tax. Tier is based on combined wealth.
+// 100K-999K: fixed 1,000 wallet tax + 5% bank tax.
+// 1M-999M: 25% wallet tax + 15% bank tax.
+// 1B+: 30% wallet tax + 15% bank tax.
 const DAILY_COIN_TAX_INTERVAL = 86400;
+const DAILY_COIN_TAX_BASE_THRESHOLD = 100000;
+const DAILY_COIN_TAX_FIXED = 1000;
+const DAILY_COIN_TAX_MILLIONAIRE = 1000000;
+const DAILY_COIN_TAX_BILLIONAIRE = 1000000000;
 function runDailyCoinTax() {
  const now = Math.floor(Date.now() / 1000);
  const row = db.prepare("SELECT value FROM chilly_config WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").get();
@@ -347,23 +352,64 @@ function runDailyCoinTax() {
  }
  const lastRun = Number(row.value) || 0;
  if (now - lastRun < DAILY_COIN_TAX_INTERVAL) return;
+ const accounts = db.prepare('SELECT user, coins, bank FROM global_users WHERE coins + bank >= ?').all(DAILY_COIN_TAX_BASE_THRESHOLD);
+ const notices = [];
  const result = db.transaction(() => {
-  const eligible = db.prepare('SELECT COUNT(*) AS count FROM global_users WHERE coins + bank >= ?').get(DAILY_COIN_TAX_THRESHOLD).count;
-  const accounts = db.prepare('SELECT user, coins, bank FROM global_users WHERE coins + bank >= ?').all(DAILY_COIN_TAX_THRESHOLD);
-  let charged = 0;
   const debit = db.prepare('UPDATE global_users SET coins=?, bank=? WHERE user=?');
+  let charged = 0;
+  let totalWalletTax = 0;
+  let totalBankTax = 0;
   for (const a of accounts) {
-   let remaining = DAILY_COIN_TAX_AMOUNT;
-   const walletDebit = Math.min(a.coins, remaining);
-   remaining -= walletDebit;
-   const bankDebit = Math.min(a.bank, remaining);
-   debit.run(a.coins - walletDebit, a.bank - bankDebit, a.user);
-   charged++;
+   const wealth = a.coins + a.bank;
+   let walletTax = 0;
+   let bankRate = 0;
+   let tier = '';
+   if (wealth >= DAILY_COIN_TAX_BILLIONAIRE) {
+    walletTax = Math.floor(a.coins * 0.30);
+    bankRate = 0.15;
+    tier = 'Billionaire';
+   } else if (wealth >= DAILY_COIN_TAX_MILLIONAIRE) {
+    walletTax = Math.floor(a.coins * 0.25);
+    bankRate = 0.15;
+    tier = 'Millionaire';
+   } else {
+    walletTax = DAILY_COIN_TAX_FIXED;
+    bankRate = 0.05;
+    tier = '100K+ Member';
+   }
+   const bankTax = Math.floor(a.bank * bankRate);
+   // The fixed 1,000-coin levy is collected from wallet first, then bank if needed.
+   const walletTaxPaid = Math.min(a.coins, walletTax);
+   const fixedTaxFromBank = Math.max(0, walletTax - walletTaxPaid);
+   const nextCoins = Math.max(0, a.coins - walletTaxPaid);
+   const nextBank = Math.max(0, a.bank - bankTax - fixedTaxFromBank);
+   debit.run(nextCoins, nextBank, a.user);
+   totalWalletTax += walletTaxPaid;
+   totalBankTax += bankTax + fixedTaxFromBank;
+   if (walletTaxPaid + bankTax + fixedTaxFromBank > 0) {
+    charged++;
+    notices.push({ user: a.user, tier, walletTax: walletTaxPaid, bankTax: bankTax + fixedTaxFromBank, oldWallet: a.coins, oldBank: a.bank, newWallet: nextCoins, newBank: nextBank });
+   }
   }
   db.prepare("UPDATE chilly_config SET value=? WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").run(String(now));
-  return { eligible, charged };
+  return { eligible: accounts.length, charged, totalWalletTax, totalBankTax };
  })();
- console.log(`💸 Daily coin tax applied: ${result.charged}/${result.eligible} global accounts charged ${DAILY_COIN_TAX_AMOUNT} coins (wallet first, then bank).`);
+ console.log(`💸 Daily tax applied: ${result.charged}/${result.eligible} accounts; wallet tax ${result.totalWalletTax}, bank tax ${result.totalBankTax}.`);
+ // Notify each affected member privately. A failed/closed DM does not undo the tax.
+ for (const n of notices) {
+  client.users.fetch(n.user).then(user => user.send({ embeds: [new EmbedBuilder()
+   .setColor(0xE67E22)
+   .setTitle('<:F1:1565221539844989060> Chilly Daily Tax Notice')
+   .setDescription(`<:Redtick:1565221545453027339> Your daily **${n.tier}** tax has been deducted from your global Chilly account.`)
+   .addFields(
+    { name: '👛 Wallet tax', value: money(n.walletTax), inline: true },
+    { name: '🏦 Bank tax', value: money(n.bankTax), inline: true },
+    { name: '💰 Total deducted', value: money(n.walletTax + n.bankTax), inline: false },
+    { name: 'New wallet balance', value: money(n.newWallet), inline: true },
+    { name: 'New bank balance', value: money(n.newBank), inline: true }
+   )
+   .setFooter({ text: 'Chilly Economy • Daily tax applies automatically' })] })).catch(err => console.warn(`Could not DM daily tax notice to ${n.user}: ${err.message}`));
+ }
 }
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
 function choose(a,n) {
@@ -896,10 +942,35 @@ Logs: <#${log.id}>`,ephemeral:true});
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
   }
+  if(c==='tax') {
+   const a=account(g.id,u.id);
+   const wealth=a.coins+a.bank;
+   let tier='Below 100K';
+   let walletRule='No wallet tax';
+   let bankRule='No bank tax';
+   if(wealth>=DAILY_COIN_TAX_BILLIONAIRE) {
+    tier='Billionaire'; walletRule='30% of your wallet balance'; bankRule='15% of your bank balance';
+   } else if(wealth>=DAILY_COIN_TAX_MILLIONAIRE) {
+    tier='Millionaire'; walletRule='25% of your wallet balance'; bankRule='15% of your bank balance';
+   } else if(wealth>=DAILY_COIN_TAX_BASE_THRESHOLD) {
+    tier='100K+ Member'; walletRule='Fixed 1,000 coins'; bankRule='5% of your bank balance';
+   }
+   return i.reply({embeds:[new EmbedBuilder().setColor(0xE67E22)
+    .setTitle('<:F1:1565221539844989060> Chilly Tax System • Full Details')
+    .setDescription('<:Redtick:1565221545453027339> Chilly uses a **global daily tax system**. Your tier is decided by your combined **Wallet + Bank** balance across all servers using Chilly. Tax is processed automatically every 24 hours.')
+    .addFields(
+     {name:'🟢 Below 100K',value:`**Wallet:** 0%\n**Bank:** 0%\nNo daily tax while your combined wealth is below 100,000 coins.`,inline:false},
+     {name:'💰 100K–999K',value:`**Wallet:** Fixed 1,000 coins daily\n**Bank:** 5% daily\nThe fixed 1,000-coin charge is taken from your wallet first, then from your bank if your wallet does not have enough.`,inline:false},
+     {name:'💎 Millionaire • 1M–999M',value:`**Wallet:** 25% daily\n**Bank:** 15% daily`,inline:false},
+     {name:'👑 Billionaire • 1B+',value:`**Wallet:** 30% daily\n**Bank:** 15% daily`,inline:false},
+     {name:'📌 Important information',value:`• Wallet and bank are global, not server-specific.\n• Your tax tier is based on total wallet + bank wealth before tax is deducted.\n• Bank tax is calculated from your bank balance.\n• Millionaire/Billionaire wallet tax is calculated from your wallet balance.\n• Tax is deducted automatically once every 24 hours.\n• A tax notice is sent to your DMs after a successful deduction.\n• If your DMs are closed, the tax can still be deducted; check \`/bank\` and \`/balance\` for your updated amounts.`,inline:false},
+     {name:'📊 Your current account',value:`**Tier:** ${tier}\n**Wallet:** ${money(a.coins)}\n**Bank:** ${money(a.bank)}\n**Total wealth:** ${money(wealth)}\n**Your current daily rates:** Wallet — ${walletRule}; Bank — ${bankRule}`,inline:false}
+    ).setFooter({text:'Chilly Global Economy • Use /bank, /deposit and /withdraw'})]});
+  }
   if(c==='bank') {
    const a=account(g.id,u.id);
    return i.reply({embeds:[new EmbedBuilder().setColor(0x2ECC71).setTitle('🏦 Chilly Global Bank')
-    .setDescription('Your bank account is shared across every server using Chilly.')
+    .setDescription('Your bank account is shared across every server using Chilly.\n\n**Daily tax notice:** 100K–999K wealth: 1,000 coins + 5% bank tax. 1M–999M: 25% wallet tax + 15% bank tax. 1B+: 30% wallet tax + 15% bank tax. Tax is deducted automatically every 24 hours.')
     .addFields(
      {name:'👛 Wallet',value:money(a.coins),inline:true},
      {name:'🏦 Bank',value:money(a.bank),inline:true},
@@ -911,14 +982,14 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(a.coins<amount) return i.reply({content:'❌ You do not have enough coins in your wallet.',ephemeral:true});
    db.prepare('UPDATE global_users SET coins=coins-?, bank=bank+? WHERE user=?').run(amount,amount,u.id);
    const updated=account(g.id,u.id);
-   return i.reply('🏦 Deposited **'+money(amount)+'** into your global bank. Bank balance: **'+money(updated.bank)+'**.');
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x2ECC71).setTitle('<:F1:1565221539844989060> Deposit Successful').setDescription('<:Redtick:1565221545453027339> Your coins have been safely transferred to your **Global Bank**.').addFields({name:'📥 Deposited',value:money(amount),inline:true},{name:'🏦 New bank balance',value:money(updated.bank),inline:true},{name:'👛 Wallet balance',value:money(updated.coins),inline:true}).addFields({name:'⚠️ Daily tax reminder',value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.'}).setFooter({text:'Chilly Global Banking • Your bank is shared across servers'})]});
   }
   if(c==='withdraw') {
    const amount=i.options.getInteger('amount'), a=account(g.id,u.id);
    if(a.bank<amount) return i.reply({content:'❌ You do not have enough coins in your bank.',ephemeral:true});
    db.prepare('UPDATE global_users SET bank=bank-?, coins=coins+? WHERE user=?').run(amount,amount,u.id);
    const updated=account(g.id,u.id);
-   return i.reply('💸 Withdrew **'+money(amount)+'** from your global bank. Wallet balance: **'+money(updated.coins)+'**.');
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x3498DB).setTitle('<:F1:1565221539844989060> Withdrawal Successful').setDescription('<:Redtick:1565221545453027339> Your coins have been transferred from your **Global Bank** to your wallet.').addFields({name:'📤 Withdrawn',value:money(amount),inline:true},{name:'👛 New wallet balance',value:money(updated.coins),inline:true},{name:'🏦 Bank balance',value:money(updated.bank),inline:true}).addFields({name:'⚠️ Daily tax reminder',value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.'}).setFooter({text:'Chilly Global Banking • Your bank is shared across servers'})]});
   }
   if(c==='slots') {
    const bet=i.options.getInteger('bet'), a=account(g.id,u.id);
