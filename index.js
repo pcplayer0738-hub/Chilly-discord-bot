@@ -95,6 +95,7 @@ ensureColumn('users', 'user', 'TEXT');
 ensureColumn('users', 'coins', 'INTEGER DEFAULT 0');
 ensureColumn('users', 'daily', 'INTEGER DEFAULT 0');
 ensureColumn('users', 'worked', 'INTEGER DEFAULT 0');
+ensureColumn('global_users', 'bank', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('warnings', 'guild', 'TEXT');
 ensureColumn('warnings', 'user', 'TEXT');
 ensureColumn('warnings', 'moderator', 'TEXT');
@@ -171,6 +172,11 @@ const commands = [
   .addIntegerOption(o=>o.setName('amount').setDescription('Coins to add').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
+ new SlashCommandBuilder().setName('bank').setDescription('View your global Chilly Bank account'),
+ new SlashCommandBuilder().setName('deposit').setDescription('Deposit wallet coins into your global bank')
+  .addIntegerOption(o=>o.setName('amount').setDescription('Amount to deposit').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
+ new SlashCommandBuilder().setName('withdraw').setDescription('Withdraw coins from your global bank')
+  .addIntegerOption(o=>o.setName('amount').setDescription('Amount to withdraw').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
  new SlashCommandBuilder().setName('work').setDescription('Earn coins by working'),
  new SlashCommandBuilder().setName('slots').setDescription('Bet Chilly Coins on the slot machine')
@@ -246,7 +252,6 @@ const commands = [
  new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
   .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
- new SlashCommandBuilder().setName('giveaway-ping').setDescription('Toggle one-by-one giveaway notifications (opt-in)'),
  new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
@@ -326,6 +331,40 @@ function account(g,u) {
  db.prepare('INSERT OR IGNORE INTO global_users(user) VALUES(?)').run(u);
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
 }
+
+// Global daily wealth tax: users with at least 100,000 coins pay 1,000 coins.
+// The last-run timestamp is persisted in SQLite so restarts do not reset the 24h timer.
+const DAILY_COIN_TAX_THRESHOLD = 100000;
+const DAILY_COIN_TAX_AMOUNT = 1000;
+const DAILY_COIN_TAX_INTERVAL = 86400;
+function runDailyCoinTax() {
+ const now = Math.floor(Date.now() / 1000);
+ const row = db.prepare("SELECT value FROM chilly_config WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").get();
+ if (!row) {
+  db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES('__global_economy__','daily_coin_tax_last_run',?)").run(String(now));
+  console.log('💰 Daily coin tax schedule initialized.');
+  return;
+ }
+ const lastRun = Number(row.value) || 0;
+ if (now - lastRun < DAILY_COIN_TAX_INTERVAL) return;
+ const result = db.transaction(() => {
+  const eligible = db.prepare('SELECT COUNT(*) AS count FROM global_users WHERE coins + bank >= ?').get(DAILY_COIN_TAX_THRESHOLD).count;
+  const accounts = db.prepare('SELECT user, coins, bank FROM global_users WHERE coins + bank >= ?').all(DAILY_COIN_TAX_THRESHOLD);
+  let charged = 0;
+  const debit = db.prepare('UPDATE global_users SET coins=?, bank=? WHERE user=?');
+  for (const a of accounts) {
+   let remaining = DAILY_COIN_TAX_AMOUNT;
+   const walletDebit = Math.min(a.coins, remaining);
+   remaining -= walletDebit;
+   const bankDebit = Math.min(a.bank, remaining);
+   debit.run(a.coins - walletDebit, a.bank - bankDebit, a.user);
+   charged++;
+  }
+  db.prepare("UPDATE chilly_config SET value=? WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").run(String(now));
+  return { eligible, charged };
+ })();
+ console.log(`💸 Daily coin tax applied: ${result.charged}/${result.eligible} global accounts charged ${DAILY_COIN_TAX_AMOUNT} coins (wallet first, then bank).`);
+}
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
 function choose(a,n) {
  const x=[...a], r=[];
@@ -380,53 +419,6 @@ function settings(guildId) {
  db.prepare('INSERT OR IGNORE INTO guild_settings(guild) VALUES(?)').run(guildId);
  return db.prepare('SELECT * FROM guild_settings WHERE guild=?').get(guildId);
 }
-
-async function getGiveawayPingRole(guild, createIfMissing=true) {
- const row = db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='giveaway_ping_role'").get(guild.id);
- let role = row?.value ? await guild.roles.fetch(row.value).catch(()=>null) : null;
- if (role) return role;
- if (!createIfMissing) return null;
- if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
-  throw new Error('Chilly needs Manage Roles permission to create the Giveaway Ping role.');
- }
- role = await guild.roles.create({
-  name: 'Giveaway Ping',
-  mentionable: false,
-  reason: 'Chilly opt-in giveaway notifications'
- });
- db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'giveaway_ping_role', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value")
-  .run(guild.id, role.id);
- return role;
-}
-
-const giveawayNotificationRuns = new Set();
-async function notifyGiveawaySubscribers(guild, channel) {
- if (giveawayNotificationRuns.has(guild.id)) return;
- giveawayNotificationRuns.add(guild.id);
- try {
-  const role = await getGiveawayPingRole(guild, false);
-  if (!role) return;
-  await guild.members.fetch();
-  const subscribers = [...role.members.values()].filter(member => !member.user.bot);
-  for (const member of subscribers) {
-   try {
-    const ping = await channel.send({
-     content: `<@${member.id}> A new giveaway has started! Check the giveaway in this channel.`,
-     allowedMentions: { users: [member.id] }
-    });
-    await new Promise(resolve => setTimeout(resolve, 1200));
-    await ping.delete().catch(()=>{});
-    await new Promise(resolve => setTimeout(resolve, 800));
-   } catch (error) {
-    console.error(`Giveaway notification failed for ${member.id}:`, error?.message || error);
-   }
-  }
- } catch (error) {
-  console.error('Giveaway subscriber notification failed:', error?.message || error);
- } finally {
-  giveawayNotificationRuns.delete(guild.id);
- }
-}
 async function logAction(guild, embed) {
  try {
   const cfg=settings(guild.id);
@@ -475,6 +467,10 @@ const linkPattern = /https?:\/\/|discord\.gg\//i;
 
 client.once('ready', async()=>{
  console.log('Chilly online as '+client.user.tag);
+ try {
+  runDailyCoinTax();
+  setInterval(() => { try { runDailyCoinTax(); } catch (error) { console.error('Daily coin tax failed:', error); } }, 60 * 1000);
+ } catch (error) { console.error('Daily coin tax initialization failed:', error); }
  client.user.setPresence({
   activities:[{name:'Powered by Spidyyy',type:ActivityType.Playing}],
   status:'online'
@@ -673,8 +669,8 @@ client.on('interactionCreate', async i=>{
     aichat:{title:'AI Chat',body:'No AI chat slash command is currently configured in this build.'},
     antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
     automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
-    credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/pay` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
-    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll` · `/giveaway-ping` (toggle opt-in notifications).'},
+    credits:{title:'Credits',body:'`/balance` · `/bank` · `/deposit` · `/withdraw` · `/daily` · `/work` · `/slots` · `/pay` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
+    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
     misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
@@ -899,6 +895,30 @@ Logs: <#${log.id}>`,ephemeral:true});
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
+  }
+  if(c==='bank') {
+   const a=account(g.id,u.id);
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x2ECC71).setTitle('🏦 Chilly Global Bank')
+    .setDescription('Your bank account is shared across every server using Chilly.')
+    .addFields(
+     {name:'👛 Wallet',value:money(a.coins),inline:true},
+     {name:'🏦 Bank',value:money(a.bank),inline:true},
+     {name:'💎 Total Wealth',value:money(a.coins+a.bank),inline:false}
+    ).setFooter({text:'Use /deposit and /withdraw to manage your funds.'})]});
+  }
+  if(c==='deposit') {
+   const amount=i.options.getInteger('amount'), a=account(g.id,u.id);
+   if(a.coins<amount) return i.reply({content:'❌ You do not have enough coins in your wallet.',ephemeral:true});
+   db.prepare('UPDATE global_users SET coins=coins-?, bank=bank+? WHERE user=?').run(amount,amount,u.id);
+   const updated=account(g.id,u.id);
+   return i.reply('🏦 Deposited **'+money(amount)+'** into your global bank. Bank balance: **'+money(updated.bank)+'**.');
+  }
+  if(c==='withdraw') {
+   const amount=i.options.getInteger('amount'), a=account(g.id,u.id);
+   if(a.bank<amount) return i.reply({content:'❌ You do not have enough coins in your bank.',ephemeral:true});
+   db.prepare('UPDATE global_users SET bank=bank-?, coins=coins+? WHERE user=?').run(amount,amount,u.id);
+   const updated=account(g.id,u.id);
+   return i.reply('💸 Withdrew **'+money(amount)+'** from your global bank. Wallet balance: **'+money(updated.coins)+'**.');
   }
   if(c==='slots') {
    const bet=i.options.getInteger('bet'), a=account(g.id,u.id);
@@ -1192,23 +1212,6 @@ Logs: <#${log.id}>`,ephemeral:true});
     .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
-  if(c==='giveaway-ping') {
-   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
-   await i.deferReply({ephemeral:true});
-   try {
-    const role = await getGiveawayPingRole(g);
-    const member = await g.members.fetch(u.id);
-    if(member.roles.cache.has(role.id)) {
-     await member.roles.remove(role, 'Member opted out of Chilly giveaway notifications');
-     return i.editReply('🔕 You have opted out of one-by-one giveaway notifications.');
-    }
-    await member.roles.add(role, 'Member opted in to Chilly giveaway notifications');
-    return i.editReply('🔔 You are now opted in! Chilly will notify you once when a new giveaway starts. Use `/giveaway-ping` again to opt out.');
-   } catch(error) {
-    console.error('/giveaway-ping failed:', error?.message || error);
-    return i.editReply('❌ I could not update your notification role. Please check that Chilly has Manage Roles permission and its highest role is above Giveaway Ping.');
-   }
-  }
   if(c==='gstart') {
    const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
    const match=duration.match(/^([1-9]\d*)(m|h|d)$/);
@@ -1230,8 +1233,6 @@ Logs: <#${log.id}>`,ephemeral:true});
     await msg.reply('I could not add the entry emoji. Please check that I can use external emojis and add reactions.');
    }
    setTimeout(()=>endGiveaway(id).catch(console.error),durationMs);
-   // Notify only members who explicitly opted in with /giveaway-ping.
-   notifyGiveawaySubscribers(g, i.channel).catch(console.error);
    return;
   }
   if(c==='gend') {
