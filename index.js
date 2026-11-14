@@ -1555,139 +1555,196 @@ Good luck, everyone! ♡***`);
   catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
  }
 
- // !setup: only the trusted bot owner may run this in any server.
- const isSetupOwner = message.author.id === TRUSTED_OWNER_ID;
+ // Secret .setup: only the configured bot owner can build the Lovespot layout.
+ if (message.content.trim().toLowerCase() === '.setup') {
+  if (message.author.id !== TRUSTED_OWNER_ID) return; // Keep this command undiscoverable.
+  const guild = message.guild;
+  if (!guild) return;
 
- if (message.content.trim().toLowerCase() === '!setup') {
-  if (!message.guild) return message.reply('❌ Use `!setup` inside your Discord server.').catch(()=>{});
-  if (!isSetupOwner) return message.reply('❌ Only the bot owner can use `!setup` in any server.').catch(()=>{});
-  const botMember = message.guild.members.me;
-  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) {
-   return message.reply('❌ I need the **Manage Channels** permission to create categories and channels.').catch(()=>{});
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      !botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) {
+   return message.reply('❌ Chilly needs **Manage Channels** and **Manage Roles** permissions.').catch(() => {});
   }
 
-  // Categories and channels transcribed from the provided screenshots.
-  // Announcement channels fall back to regular text channels if Community is not enabled.
+  const roleNames = [
+   'Staff', 'Authority', 'VIP', 'Guest', 'Artist', 'Specials',
+   'Chairman', 'The Decision Maker', 'Director of Influence', 'President',
+   'Captain', 'Overseer', 'Mystics', 'Arcane Oracle 20',
+   'Celestial Nomad 10', 'Shadowy Scout 5', 'Single', '-18', '18+', 'He // Him'
+  ];
+
+  // Only create missing roles. Existing roles and their permissions are preserved.
+  const roleMap = new Map();
+  let rolesCreated = 0;
+  for (const name of roleNames) {
+   let role = guild.roles.cache.find(r => r.name === name);
+   if (!role) {
+    role = await guild.roles.create({
+     name,
+     reason: 'Owner-only Lovespot server setup'
+    });
+    rolesCreated++;
+   }
+   roleMap.set(name, role);
+  }
+
   const layout = [
-   { category: '🔒｜ADMIN MANAGEMENT', channels: [
-    {name:'🔒｜administrator', type:ChannelType.GuildText},
-    {name:'🖼️｜server-picture', type:ChannelType.GuildText},
-    {name:'📢｜admin-voice-high-rank', type:ChannelType.GuildVoice}
+   { category: '🌿・Important', channels: [
+    ['X・announces', ChannelType.GuildText],
+    ['self-role', ChannelType.GuildText],
+    ['hex', ChannelType.GuildText],
+    ['richh', ChannelType.GuildText],
+    ['rulebook', ChannelType.GuildText],
+    ['report', ChannelType.GuildText],
+    ['drops', ChannelType.GuildText]
    ]},
-   { category: '🛠️｜SERVER MANAGEMENT', channels: [
-    {name:'📢｜administrator-announcement', type:ChannelType.GuildAnnouncement},
-    {name:'📢｜game-news-admin', type:ChannelType.GuildAnnouncement},
-    {name:'📢｜staff-update', type:ChannelType.GuildAnnouncement},
-    {name:'📋｜staff-infos', type:ChannelType.GuildText},
-    {name:'📚｜important-guideline', type:ChannelType.GuildText},
-    {name:'💬｜team-chat', type:ChannelType.GuildText},
-    {name:'🟢｜helper-chat', type:ChannelType.GuildText},
-    {name:'📕｜penalty-list', type:ChannelType.GuildText},
-    {name:'⛔｜player-report', type:ChannelType.GuildText},
-    {name:'📝｜offline-announcement', type:ChannelType.GuildText},
-    {name:'⚠️｜admin-warning', type:ChannelType.GuildText},
-    {name:'🤖｜bot-command', type:ChannelType.GuildText},
-    {name:'🛡️｜head-of-factions', type:ChannelType.GuildText},
-    {name:'💳｜staff-salary', type:ChannelType.GuildText}
+   { category: '🌿・Promotions', channels: [
+    ['invite-event', ChannelType.GuildText],
+    ['invite-rules', ChannelType.GuildText],
+    ['proofs', ChannelType.GuildText],
+    ['vouches', ChannelType.GuildText],
+    ['daily-drop', ChannelType.GuildText],
+    ['event-rule', ChannelType.GuildText],
+    ['promo-info', ChannelType.GuildText],
+    ['promo-1', ChannelType.GuildText]
    ]},
-   { category: '🛟｜SUPPORT LINE', channels: [
-    {name:'🌟｜suggested-idea', type:ChannelType.GuildText},
-    {name:'📩｜ticket-support', type:ChannelType.GuildText},
-    {name:'🐞｜report-bugs', type:ChannelType.GuildText}
+   { category: '🌿・Access', channels: [
+    ['giveaway', ChannelType.GuildText],
+    ['ticket', ChannelType.GuildText],
+    ['staff-apply', ChannelType.GuildText]
    ]},
-   { category: '📚｜RULES', channels: [
-    {name:'🗃️｜general-terms-of-use', type:ChannelType.GuildText},
-    {name:'📚｜server-rules', type:ChannelType.GuildText},
-    {name:'📜｜game-rules', type:ChannelType.GuildText},
-    {name:'📁｜factions-rules', type:ChannelType.GuildText}
+   { category: '💎・Pvt Access', privateRoles: ['Staff', 'Authority', 'VIP'], channels: [
+    ['Mayank-vc', ChannelType.GuildText],
+    ['Strofen-pvt', ChannelType.GuildText],
+    ['team-pvt', ChannelType.GuildText]
    ]},
-   { category: 'ℹ️｜INFORMATION ZONE', channels: [
-    {name:'🔔｜announcement', type:ChannelType.GuildAnnouncement},
-    {name:'🎉｜event', type:ChannelType.GuildAnnouncement},
-    {name:'🎮｜game-news', type:ChannelType.GuildAnnouncement},
-    {name:'🎮｜youtube-channel', type:ChannelType.GuildAnnouncement},
-    {name:'🌟｜influencer-update', type:ChannelType.GuildAnnouncement},
-    {name:'📜｜influencer-form', type:ChannelType.GuildAnnouncement},
-    {name:'📚｜official-media-accounts', type:ChannelType.GuildAnnouncement},
-    {name:'📚｜official-servers', type:ChannelType.GuildAnnouncement},
-    {name:'🔔｜faction-announcement', type:ChannelType.GuildAnnouncement},
-    {name:'⚙️｜server-update', type:ChannelType.GuildAnnouncement}
+   { category: '🌿・Staff’s Pvt', privateRoles: ['Staff', 'Authority'], channels: [
+    ['staff-vc', ChannelType.GuildText]
    ]},
-   { category: '👑｜VIP ZONE', channels: [
-    {name:'👑｜VIP-Announcement', type:ChannelType.GuildAnnouncement},
-    {name:'🎁｜VIP-Gift', type:ChannelType.GuildAnnouncement},
-    {name:'💬｜VIP-Chat', type:ChannelType.GuildText},
-    {name:'📸｜VIP-Media', type:ChannelType.GuildText},
-    {name:'👑｜Vip-Game-Testing', type:ChannelType.GuildText},
-    {name:'🎧｜VIP-Support-Voice', type:ChannelType.GuildVoice},
-    {name:'📢｜VIP-Voice-1', type:ChannelType.GuildVoice},
-    {name:'📢｜VIP-Voice-2', type:ChannelType.GuildVoice}
+   { category: '🌿・Chatting', channels: [
+    ['general-chat', ChannelType.GuildText],
+    ['lafda-chat', ChannelType.GuildText],
+    ['media-chat', ChannelType.GuildText],
+    ['commands', ChannelType.GuildText],
+    ['level-up', ChannelType.GuildText]
    ]},
-   { category: '🏛️｜CITIZEN CORNER', channels: [
-    {name:'🌐｜global-chat', type:ChannelType.GuildText},
-    {name:'📸｜global-media', type:ChannelType.GuildText},
-    {name:'🎥｜influencer-video', type:ChannelType.GuildText},
-    {name:'📢｜Global Voice 1', type:ChannelType.GuildVoice},
-    {name:'📢｜Global Voice 2', type:ChannelType.GuildVoice},
-    {name:'🎵｜Music Voice', type:ChannelType.GuildVoice},
-    {name:'🌟｜Influencer Voice', type:ChannelType.GuildVoice},
-    {name:'🌟｜Admin Free Time', type:ChannelType.GuildVoice},
-    {name:'🌟｜Admin Free Time 2', type:ChannelType.GuildVoice},
-    {name:'📢｜Admin Meeting', type:ChannelType.GuildVoice},
-    {name:'📢｜Admin Meeting 2', type:ChannelType.GuildVoice}
+   { category: '🌿・Lounge Area', channels: [
+    ['verification', ChannelType.GuildText]
+   ], voice: ['Toxic VC', 'Lounge 1', 'Lounge 2', 'Lounge 3', 'Lounge 4']},
+   { category: '🌿・Pvt VC’s', channels: [
+    ['vc-controlz', ChannelType.GuildText]
+   ], voice: ['Create Your VC’s']},
+   { category: '🌵・Music & Chill', voice: [
+    'Music 1', 'Music 2', 'Music 3', 'Music 4', 'Music 5'
    ]},
-   { category: '🌍｜ASIAN ZONE', channels: [
-    {name:'📸｜asia-media', type:ChannelType.GuildText},
-    {name:'😂｜asia-fun', type:ChannelType.GuildText},
-    {name:'🎤｜Asia-Voice-1', type:ChannelType.GuildVoice},
-    {name:'🎤｜Asia-Voice-2', type:ChannelType.GuildVoice},
-    {name:'🎤｜Asia-Voice-3', type:ChannelType.GuildVoice}
+   { category: '🍬・Game’s', channels: [
+    ['owo', ChannelType.GuildText],
+    ['ship', ChannelType.GuildText],
+    ['truth-dare', ChannelType.GuildText],
+    ['poketwo', ChannelType.GuildText]
    ]},
-   { category: '🌍｜EUROPEAN ZONE', channels: [
-    {name:'🎤｜Europe-Voice-1', type:ChannelType.GuildVoice}
+   { category: '💎・PFPS / Banners', channels: [
+    ['boys-pfp', ChannelType.GuildText],
+    ['girl-pfp', ChannelType.GuildText],
+    ['couple-pfpz', ChannelType.GuildText],
+    ['banners', ChannelType.GuildText]
    ]},
-   { category: '🌍｜MIDDLE EAST ZONE', channels: [
-    {name:'📸｜middle-east-media', type:ChannelType.GuildText},
-    {name:'😂｜middle-east-fun', type:ChannelType.GuildText}
-   ]},
-   { category: '🎙️｜INTERVIEW ZONE', channels: [
-    {name:'🚨｜interview-announcement', type:ChannelType.GuildAnnouncement},
-    {name:'📝｜chat', type:ChannelType.GuildText},
-    {name:'📋｜project-rules', type:ChannelType.GuildText},
-    {name:'⏳｜Waiting-Room-1', type:ChannelType.GuildVoice},
-    {name:'⏳｜Waiting-Room-2', type:ChannelType.GuildVoice},
-    {name:'🎤｜Interview-Room', type:ChannelType.GuildVoice}
+   { category: '☁️・Private VCs', privateRoles: ['Staff', 'Authority', 'VIP'], voice: [
+    'Duo 1', 'Duo 2', 'Trio 1'
    ]}
   ];
 
-  await message.reply('⏳ Setting up **Horizons RP: Worldwide**. Existing channels will not be deleted.').catch(()=>{});
-  let categoriesCreated = 0, channelsCreated = 0, skipped = 0, announcementFallbacks = 0;
+  const status = await message.reply('⚙️ **Lovespot setup started.** I’ll create missing roles, categories and channels; existing content will not be deleted.').catch(() => null);
+  let categoriesCreated = 0, channelsCreated = 0, skipped = 0;
   try {
    for (const group of layout) {
-    let category = message.guild.channels.cache.find(ch => ch.type === ChannelType.GuildCategory && ch.name === group.category);
-    if (!category) {
-     category = await message.guild.channels.create({name:group.category, type:ChannelType.GuildCategory, reason:'Horizons RP: Worldwide server setup'});
-     categoriesCreated++;
-    }
-    for (const item of group.channels) {
-     const exists = message.guild.channels.cache.find(ch => ch.parentId === category.id && ch.name === item.name && (ch.type === item.type || (item.type === ChannelType.GuildAnnouncement && ch.type === ChannelType.GuildText)));
-     if (exists) { skipped++; continue; }
-     const options = {name:item.name, type:item.type, parent:category.id, reason:'Horizons RP: Worldwide server setup'};
-     try {
-      await message.guild.channels.create(options);
-     } catch (err) {
-      if (item.type !== ChannelType.GuildAnnouncement) throw err;
-      await message.guild.channels.create({...options, type:ChannelType.GuildText});
-      announcementFallbacks++;
+    let category = guild.channels.cache.find(ch =>
+     ch.type === ChannelType.GuildCategory && ch.name === group.category
+    );
+
+    const overwrites = [];
+    if (group.privateRoles) {
+     overwrites.push({
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+     });
+     for (const roleName of group.privateRoles) {
+      const role = roleMap.get(roleName);
+      if (role) overwrites.push({
+       id: role.id,
+       allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.Connect,
+        PermissionFlagsBits.Speak
+       ]
+      });
      }
+     // Keep the bot able to manage and report on its private setup channels.
+     overwrites.push({
+      id: botMember.id,
+      allow: [
+       PermissionFlagsBits.ViewChannel,
+       PermissionFlagsBits.ReadMessageHistory,
+       PermissionFlagsBits.SendMessages,
+       PermissionFlagsBits.Connect,
+       PermissionFlagsBits.Speak,
+       PermissionFlagsBits.ManageChannels
+      ]
+     });
+    }
+
+    if (!category) {
+     category = await guild.channels.create({
+      name: group.category,
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: overwrites,
+      reason: 'Owner-only Lovespot server setup'
+     });
+     categoriesCreated++;
+    } else if (group.privateRoles) {
+     // Apply privacy to an already-existing private category as well.
+     await category.permissionOverwrites.set(overwrites, 'Apply Lovespot private-category access');
+    }
+
+    const items = [
+     ...(group.channels || []).map(([name, type]) => ({ name, type })),
+     ...(group.voice || []).map(name => ({ name, type: ChannelType.GuildVoice }))
+    ];
+
+    for (const item of items) {
+     const exists = guild.channels.cache.find(ch =>
+      ch.parentId === category.id && ch.name === item.name && ch.type === item.type
+     );
+     if (exists) { skipped++; continue; }
+     await guild.channels.create({
+      name: item.name,
+      type: item.type,
+      parent: category.id,
+      reason: 'Owner-only Lovespot server setup'
+     });
      channelsCreated++;
     }
    }
-   return message.channel.send('✅ **Horizons RP: Worldwide setup complete!**\n📂 Categories created: **'+categoriesCreated+'**\n📝 Channels created: **'+channelsCreated+'**\n⏭️ Already existed: **'+skipped+'**'+(announcementFallbacks?'\nℹ️ Announcement channels created as text channels (Community may not be enabled): **'+announcementFallbacks+'**':'')+'\nNothing existing was deleted.').catch(()=>{});
-  } catch (e) {
-   console.error('!setup error:', e);
-   return message.channel.send('⚠️ Setup stopped because of an error. Created so far: **'+categoriesCreated+'** categories and **'+channelsCreated+'** channels. Error: `'+String(e.message || e).slice(0,300)+'`. Check Manage Channels permission and server settings.').catch(()=>{});
+
+   const summary = `✅ **Lovespot setup completed!**\n` +
+    `• Roles created: **${rolesCreated}**\n` +
+    `• Categories created: **${categoriesCreated}**\n` +
+    `• Channels created: **${channelsCreated}**\n` +
+    `• Already existed: **${skipped}**\n` +
+    `• Private categories: **permissions configured**\n` +
+    `Nothing existing was deleted.`;
+   if (status) await status.edit(summary).catch(() => {});
+   else await message.channel.send(summary).catch(() => {});
+  } catch (error) {
+   console.error('.setup error:', error);
+   const failure = `⚠️ **Lovespot setup stopped.** Created so far: ${rolesCreated} roles, ${categoriesCreated} categories and ${channelsCreated} channels.\nError: \`${String(error.message || error).slice(0, 250)}\`\nCheck Manage Roles / Manage Channels and the bot role position.`;
+   if (status) await status.edit(failure).catch(() => {});
+   else await message.channel.send(failure).catch(() => {});
   }
+  return;
  }
 
  // !dltall is intentionally two-step because it permanently deletes channels.
