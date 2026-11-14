@@ -1567,26 +1567,57 @@ Good luck, everyone! ♡***`);
    return message.reply('❌ Chilly needs **Manage Channels** and **Manage Roles** permissions.').catch(() => {});
   }
 
-  const roleNames = [
-   'Staff', 'Authority', 'VIP', 'Guest', 'Artist', 'Specials',
-   'Chairman', 'The Decision Maker', 'Director of Influence', 'President',
-   'Captain', 'Overseer', 'Mystics', 'Arcane Oracle 20',
-   'Celestial Nomad 10', 'Shadowy Scout 5', 'Single', '-18', '18+', 'He // Him'
+  // Role colours and suffix symbols are matched to the supplied Lovespot screenshots.
+  // Hex colours approximate the coloured dots shown beside each Discord role.
+  const roleSpecs = [
+   { key: 'Staff', name: 'Staff', color: '#99AAB5', suffix: ' ✦' },
+   { key: 'Authority', name: 'Authority', color: '#99AAB5', suffix: ' ⚑' },
+   { key: 'VIP', name: 'Vip', color: '#CD853F', suffix: ' · VIP' },
+   { key: 'Guest', name: 'Guest', color: '#E67E22', suffix: ' 👑' },
+   { key: 'Artist', name: 'Artist', color: '#E67E22', suffix: ' 🎨' },
+   { key: 'Specials', name: 'Specials', color: '#ED1C24', suffix: ' 🪅' },
+   { key: 'Chairman', name: 'Chairman', color: '#99AAB5', suffix: ' 💢' },
+   { key: 'The Decision Maker', name: 'The Decision Maker', color: '#99AAB5', suffix: ' ₿' },
+   { key: 'Director of Influence', name: 'Director of Influence', color: '#99AAB5', suffix: ' ☪' },
+   { key: 'President', name: 'President', color: '#99AAB5', suffix: ' 💎' },
+   { key: 'Captain', name: 'Captain', color: '#99AAB5', suffix: ' ⚔️' },
+   { key: 'Overseer', name: 'Overseer', color: '#99AAB5', suffix: ' †' },
+   { key: 'Mystics', name: 'Mystics', color: '#99AAB5', suffix: ' 🐺' },
+   { key: 'Arcane Oracle 20', name: 'Arcane Oracle 20', color: '#77A37C', suffix: ' 💚' },
+   { key: 'Celestial Nomad 10', name: 'Celestial Nomad 10', color: '#8E6CC8', suffix: ' 👹' },
+   { key: 'Shadowy Scout 5', name: 'Shadowy Scout 5', color: '#F4B6C2', suffix: ' ❄️' },
+   { key: 'Single', name: 'Single', color: '#99AAB5', suffix: ' 🔒' },
+   { key: '-18', name: '-18', color: '#99AAB5', suffix: ' 🔞' },
+   { key: '18+', name: '18+', color: '#99AAB5', suffix: ' 🔞' },
+   { key: 'He // Him', name: 'He // Him', color: '#3498DB', suffix: ' 🩵' },
+   { key: 'Hex Red', name: 'hex Red', color: '#ED1C24', suffix: ' ·' },
+   { key: 'Lovespot Link', name: 'discord.gg/lovespot', color: '#99AAB5', suffix: '' },
+   { key: 'Famzz', name: '/famzz?', color: '#99AAB5', suffix: ' 🦋' }
   ];
 
-  // Only create missing roles. Existing roles and their permissions are preserved.
+  // Match either the original plain role or its styled name. Existing permissions
+  // are preserved while the role name and colour are brought in line with the screenshots.
   const roleMap = new Map();
-  let rolesCreated = 0;
-  for (const name of roleNames) {
-   let role = guild.roles.cache.find(r => r.name === name);
+  let rolesCreated = 0, rolesStyled = 0;
+  for (const spec of roleSpecs) {
+   const styledName = `${spec.name}${spec.suffix}`;
+   let role = guild.roles.cache.find(r => r.name === styledName || r.name === spec.name);
    if (!role) {
     role = await guild.roles.create({
-     name,
-     reason: 'Owner-only Lovespot server setup'
+     name: styledName,
+     color: spec.color,
+     reason: 'Owner-only Lovespot role styling setup'
     });
     rolesCreated++;
+   } else if (role.name !== styledName || role.hexColor.toLowerCase() !== spec.color.toLowerCase()) {
+    await role.edit({
+     name: styledName,
+     color: spec.color,
+     reason: 'Apply Lovespot screenshot role styling'
+    });
+    rolesStyled++;
    }
-   roleMap.set(name, role);
+   roleMap.set(spec.key, role);
   }
 
   const layout = [
@@ -1731,6 +1762,7 @@ Good luck, everyone! ♡***`);
 
    const summary = `✅ **Lovespot setup completed!**\n` +
     `• Roles created: **${rolesCreated}**\n` +
+    `• Existing roles styled: **${rolesStyled}**\n` +
     `• Categories created: **${categoriesCreated}**\n` +
     `• Channels created: **${channelsCreated}**\n` +
     `• Already existed: **${skipped}**\n` +
