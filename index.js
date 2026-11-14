@@ -144,9 +144,6 @@ const commands = [
  new SlashCommandBuilder().setName('unjail').setDescription('Release a jailed member')
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   .addUserOption(o=>o.setName('user').setDescription('Member to release').setRequired(true)),
- new SlashCommandBuilder().setName('play').setDescription('Play audio from a YouTube URL')
-  .addStringOption(o=>o.setName('url').setDescription('YouTube video URL').setRequired(true)),
- ...['skip','pause','resume','stop','queue','leave'].map(n=>new SlashCommandBuilder().setName(n).setDescription(({skip:'Skip current track',pause:'Pause music',resume:'Resume music',stop:'Stop music and clear queue',queue:'Show music queue',leave:'Leave voice channel'})[n])),
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
@@ -178,9 +175,6 @@ const commands = [
  new SlashCommandBuilder().setName('work').setDescription('Earn coins by working'),
  new SlashCommandBuilder().setName('slots').setDescription('Bet Chilly Coins on the slot machine')
   .addIntegerOption(o=>o.setName('bet').setDescription('Coins to bet').setMinValue(1).setMaxValue(1000000).setRequired(true)),
- new SlashCommandBuilder().setName('invites').setDescription('Check your tracked invites')
-  .addUserOption(o=>o.setName('user').setDescription('Member to check')),
- new SlashCommandBuilder().setName('invites-leaderboard').setDescription('Top inviters in this server'),
  new SlashCommandBuilder().setName('pay').setDescription('Pay Chilly Coins to a member')
   .addUserOption(o=>o.setName('user').setDescription('Recipient').setRequired(true))
   .addIntegerOption(o=>o.setName('amount').setDescription('Amount').setMinValue(1).setRequired(true)),
@@ -242,9 +236,6 @@ const commands = [
  new SlashCommandBuilder().setName('serverinfo').setDescription('Show server information'),
  new SlashCommandBuilder().setName('servericon').setDescription('Download a server icon using its invite link')
   .addStringOption(o=>o.setName('invite').setDescription('Discord server invite link').setRequired(true)),
- new SlashCommandBuilder().setName('server-copy').setDescription('Copy roles, permissions, categories and channels from another server')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('source-server-id').setDescription('Server ID of the source server (Chilly must be in it)').setMinLength(17).setMaxLength(20).setRequired(true)),
  new SlashCommandBuilder().setName('poll').setDescription('Create yes/no poll')
   .addStringOption(o=>o.setName('question').setDescription('Question').setRequired(true)),
  new SlashCommandBuilder().setName('calculator').setDescription('Calculate two numbers')
@@ -255,6 +246,7 @@ const commands = [
  new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
   .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
+ new SlashCommandBuilder().setName('giveaway-ping').setDescription('Toggle one-by-one giveaway notifications (opt-in)'),
  new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
@@ -387,6 +379,53 @@ async function endGiveaway(id, reroll=false) {
 function settings(guildId) {
  db.prepare('INSERT OR IGNORE INTO guild_settings(guild) VALUES(?)').run(guildId);
  return db.prepare('SELECT * FROM guild_settings WHERE guild=?').get(guildId);
+}
+
+async function getGiveawayPingRole(guild, createIfMissing=true) {
+ const row = db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='giveaway_ping_role'").get(guild.id);
+ let role = row?.value ? await guild.roles.fetch(row.value).catch(()=>null) : null;
+ if (role) return role;
+ if (!createIfMissing) return null;
+ if (!guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
+  throw new Error('Chilly needs Manage Roles permission to create the Giveaway Ping role.');
+ }
+ role = await guild.roles.create({
+  name: 'Giveaway Ping',
+  mentionable: false,
+  reason: 'Chilly opt-in giveaway notifications'
+ });
+ db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'giveaway_ping_role', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value")
+  .run(guild.id, role.id);
+ return role;
+}
+
+const giveawayNotificationRuns = new Set();
+async function notifyGiveawaySubscribers(guild, channel) {
+ if (giveawayNotificationRuns.has(guild.id)) return;
+ giveawayNotificationRuns.add(guild.id);
+ try {
+  const role = await getGiveawayPingRole(guild, false);
+  if (!role) return;
+  await guild.members.fetch();
+  const subscribers = [...role.members.values()].filter(member => !member.user.bot);
+  for (const member of subscribers) {
+   try {
+    const ping = await channel.send({
+     content: `<@${member.id}> A new giveaway has started! Check the giveaway in this channel.`,
+     allowedMentions: { users: [member.id] }
+    });
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    await ping.delete().catch(()=>{});
+    await new Promise(resolve => setTimeout(resolve, 800));
+   } catch (error) {
+    console.error(`Giveaway notification failed for ${member.id}:`, error?.message || error);
+   }
+  }
+ } catch (error) {
+  console.error('Giveaway subscriber notification failed:', error?.message || error);
+ } finally {
+  giveawayNotificationRuns.delete(guild.id);
+ }
 }
 async function logAction(guild, embed) {
  try {
@@ -556,98 +595,6 @@ async function stealFromSourceMessage(guild, sourceMessage) {
 
 client.on('interactionCreate', async i=>{
  try {
-  if(i.isButton() && i.customId==='chilly_servercopy_cancel') return i.update({content:'Server copy cancelled.',components:[]});
-  if(i.isButton() && i.customId.startsWith('chilly_servercopy_confirm:')) {
-   const sourceId=i.customId.split(':')[1];
-   const dest=i.guild;
-   if(!dest) return i.reply({content:'Use this button inside the destination server.',ephemeral:true});
-   const allowed=i.user.id===dest.ownerId || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
-   if(!allowed) return i.reply({content:'⛔ Only the destination server owner, Administrator, or Manage Server members can confirm this copy.',ephemeral:true});
-   if(sourceId===dest.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
-   await i.deferReply({ephemeral:true});
-   const source=client.guilds.cache.get(sourceId) || await client.guilds.fetch(sourceId).catch(error=>{
-    console.error('Server-copy source fetch failed:',error);
-    return null;
-   });
-   if(!source) return i.editReply('❌ I could not access the source server. Make sure Chilly is still a member of that server and that the Server ID is correct.');
-   const [botMember,sourceBotMember]=await Promise.all([
-    dest.members.fetchMe().catch(()=>null),
-    source.members.fetchMe().catch(()=>null)
-   ]);
-   if(!sourceBotMember) return i.editReply('❌ Chilly is not available as a member in the source server. Re-invite the same bot to the source server, then try again.');
-   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return i.editReply('❌ In the **destination server**, give Chilly **Manage Roles** and **Manage Channels** permissions, then try again.');
-   let sourceRoles,sourceChannels;
-   try {
-    [sourceRoles,sourceChannels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
-   } catch(error) {
-    console.error('Server-copy source data fetch failed:',error);
-    return i.editReply(`❌ I found **${source.name}**, but could not read its roles/channels. Check that Chilly is still in the source server and try again.\nError: \`${error.code || error.message || 'Unknown API error'}\``);
-   }
-   const roleMap=new Map([[source.id,dest.id]]);
-   let rolesCreated=0, channelsCreated=0, skipped=0;
-   // Create roles from lowest to highest, excluding @everyone and integration/bot-managed roles.
-   const roles=[...sourceRoles.values()].filter(r=>r.id!==source.id&&!r.managed).sort((a,b)=>a.position-b.position);
-   for(const role of roles) {
-    try {
-     const made=await dest.roles.create({name:role.name,color:role.color,hoist:role.hoist,mentionable:role.mentionable,permissions:role.permissions.bitfield,reason:`Server structure copied from ${source.name} using Chilly`});
-     roleMap.set(role.id,made.id); rolesCreated++;
-    } catch(err) { skipped++; console.warn('Server-copy role skipped:',role.name,err.message); }
-   }
-   // Reproduce role order after creation; Discord may adjust positions around managed roles.
-   for(const role of roles) {
-    const mapped=roleMap.get(role.id); if(!mapped) continue;
-    try { const sourceRole=sourceRoles.get(role.id); await dest.roles.cache.get(mapped)?.setPosition(Math.max(1,sourceRole.position),{reason:'Preserve source role order'}); } catch {}
-   }
-   const mapOverwrites=async(channel)=>{
-    const out=[];
-    for(const ow of channel.permissionOverwrites.cache.values()) {
-     let id=null;
-     if(ow.type===0) id=roleMap.get(ow.id)||null;
-     else {
-      const member=await dest.members.fetch(ow.id).catch(()=>null);
-      if(member) id=member.id;
-     }
-     if(!id) continue;
-     out.push({id,type:ow.type,allow:ow.allow.bitfield,deny:ow.deny.bitfield});
-    }
-    return out;
-   };
-   const channels=[...sourceChannels.values()].filter(ch=>!ch.isThread()).sort((a,b)=>{
-    if(a.type===ChannelType.GuildCategory&&b.type!==ChannelType.GuildCategory) return -1;
-    if(b.type===ChannelType.GuildCategory&&a.type!==ChannelType.GuildCategory) return 1;
-    if((a.parent?.position??-1)!==(b.parent?.position??-1)) return (a.parent?.position??-1)-(b.parent?.position??-1);
-    return a.position-b.position;
-   });
-   const channelMap=new Map();
-   for(const ch of channels.filter(x=>x.type===ChannelType.GuildCategory)) {
-    try {
-     const overwrites=await mapOverwrites(ch);
-     const made=await dest.channels.create({name:ch.name,type:ChannelType.GuildCategory,permissionOverwrites:overwrites,reason:`Server structure copied from ${source.name} using Chilly`});
-     channelMap.set(ch.id,made.id); channelsCreated++;
-    } catch(err) { skipped++; console.warn('Server-copy category skipped:',ch.name,err.message); }
-   }
-   const supported=new Set([ChannelType.GuildText,ChannelType.GuildAnnouncement,ChannelType.GuildVoice,ChannelType.GuildStageVoice,ChannelType.GuildForum,ChannelType.GuildMedia]);
-   for(const ch of channels.filter(x=>x.type!==ChannelType.GuildCategory)) {
-    if(!supported.has(ch.type)) { skipped++; continue; }
-    try {
-     const overwrites=await mapOverwrites(ch);
-     const options={name:ch.name,type:ch.type,permissionOverwrites:overwrites,reason:`Server structure copied from ${source.name} using Chilly`};
-     const parentId=ch.parentId?channelMap.get(ch.parentId):null; if(parentId) options.parent=parentId;
-     if(ch.topic!==null&&ch.topic!==undefined) options.topic=ch.topic;
-     if('nsfw' in ch) options.nsfw=ch.nsfw;
-     if(ch.rateLimitPerUser!==undefined) options.rateLimitPerUser=ch.rateLimitPerUser;
-     if(ch.type===ChannelType.GuildVoice||ch.type===ChannelType.GuildStageVoice) {
-      if(ch.bitrate) options.bitrate=Math.min(ch.bitrate,dest.maximumBitrate||ch.bitrate);
-      if(ch.userLimit!==undefined) options.userLimit=ch.userLimit;
-      if(ch.rtcRegion) options.rtcRegion=ch.rtcRegion;
-     }
-     if(ch.defaultAutoArchiveDuration) options.defaultAutoArchiveDuration=ch.defaultAutoArchiveDuration;
-     const made=await dest.channels.create(options);
-     channelMap.set(ch.id,made.id); channelsCreated++;
-    } catch(err) { skipped++; console.warn('Server-copy channel skipped:',ch.name,err.message); }
-   }
-   return i.editReply(`✅ **Server copy finished!**\nSource: **${source.name}**\nDestination: **${dest.name}**\n• Roles created: **${rolesCreated}**\n• Categories and channels created: **${channelsCreated}**\n• Skipped (unsupported types, missing member overwrites, or Discord limits): **${skipped}**\n\nExisting destination roles and channels were not deleted.`);
-  }
   if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
    const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
    const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
@@ -727,7 +674,7 @@ client.on('interactionCreate', async i=>{
     antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
     automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
     credits:{title:'Credits',body:'`/balance` · `/daily` · `/work` · `/slots` · `/pay` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
-    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
+    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll` · `/giveaway-ping` (toggle opt-in notifications).'},
     jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
     logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
     misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
@@ -878,34 +825,6 @@ Message: ${message}`:''}`,ephemeral:true});
    const updated=account(g.id,to.id);
    return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
   }
-  if(c==='server-copy') {
-   const allowed=u.id===g.ownerId || !!i.memberPermissions?.has(PermissionFlagsBits.Administrator) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
-   if(!allowed) return i.reply({content:'⛔ Only the server owner, Administrator, or Manage Server members can use /server-copy.',ephemeral:true});
-   const sourceId=i.options.getString('source-server-id',true).trim();
-   if(!/^\d{17,20}$/.test(sourceId)) return i.reply({content:'Please provide a valid source server ID.',ephemeral:true});
-   if(sourceId===g.id) return i.reply({content:'Source and destination servers cannot be the same.',ephemeral:true});
-   await i.deferReply({ephemeral:true});
-   const source=client.guilds.cache.get(sourceId) || await client.guilds.fetch(sourceId).catch(error=>{
-    console.error('Server-copy preview source fetch failed:',error);
-    return null;
-   });
-   if(!source) return i.editReply('❌ I could not access the source server. Make sure Chilly is a member of that server and that the Server ID is correct.');
-   const sourceBotMember=await source.members.fetchMe().catch(()=>null);
-   if(!sourceBotMember) return i.editReply('❌ Chilly is not available in the source server. Re-invite the same bot to the source server, then try again.');
-   let roles,channels;
-   try {
-    [roles,channels]=await Promise.all([source.roles.fetch(),source.channels.fetch()]);
-   } catch(error) {
-    console.error('Server-copy preview data fetch failed:',error);
-    return i.editReply(`❌ I found **${source.name}**, but could not read its roles/channels. Check Chilly's access in the source server.\nError: \`${error.code || error.message || 'Unknown API error'}\``);
-   }
-   const roleCount=[...roles.values()].filter(r=>r.id!==source.id&&!r.managed).length;
-   const channelList=[...channels.values()].filter(ch=>!ch.isThread());
-   const categoryCount=channelList.filter(ch=>ch.type===ChannelType.GuildCategory).length;
-   const channelCount=channelList.length-categoryCount;
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`chilly_servercopy_confirm:${source.id}`).setLabel('Confirm Copy').setEmoji('📋').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('chilly_servercopy_cancel').setLabel('Cancel').setStyle(ButtonStyle.Secondary));
-   return i.editReply({content:`**Server copy preview**\nSource: **${source.name}** (\`${source.id}\`)\nDestination: **${g.name}**\n• Roles (excluding @everyone and managed roles): **${roleCount}**\n• Categories: **${categoryCount}**\n• Channels: **${channelCount}**\n• Role permissions and channel permission overwrites: **Included**\n\nChilly will create these in the destination without deleting existing roles or channels. Member-specific overwrites are copied only for members already in the destination server. Press **Confirm Copy** to continue.`,components:[row]});
-  }
   if(c==='ticket-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Only members with Administrator permission can configure tickets.',ephemeral:true});
    const sub=i.options.getSubcommand();
@@ -954,7 +873,6 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(c==='jail') { await member.roles.add(role, i.options.getString('reason')||'Jailed by moderator'); return i.reply('🔒 '+user.tag+' has been jailed.'); }
    await member.roles.remove(role,'Released from jail'); return i.reply('🔓 '+user.tag+' has been released.');
   }
-  if(['play','skip','pause','resume','stop','queue','leave'].includes(c)) return i.reply({content:'🎵 Music playback needs the voice dependencies installed and a compatible YouTube stream provider. This command is registered, but playback is not enabled in this package yet.',ephemeral:true});
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') {
    const red={id:'1565221545453027339',name:'Redtick'};
@@ -990,14 +908,6 @@ Logs: <#${log.id}>`,ephemeral:true});
    const delta=multiplier?bet*multiplier: -bet;
    db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,u.id);
    return i.reply('🎰 **Chilly Slots**\n'+roll.join(' | ')+'\n'+(multiplier?'🎉 You won **'+money(bet*multiplier)+'**!':'😢 You lost **'+money(bet)+'**.')+'\nBalance: **'+money(account(g.id,u.id).coins)+'**');
-  }
-  if(c==='invites') {
-   const who=target||u, row=db.prepare('SELECT invites FROM invite_counts WHERE guild=? AND user=?').get(g.id,who.id);
-   return i.reply('📨 **'+who.username+'** has **'+(row?.invites||0)+'** tracked invites.\nNote: tracking starts after this version is online; old invite history cannot be recovered.');
-  }
-  if(c==='invites-leaderboard') {
-   const rows=db.prepare('SELECT user,invites FROM invite_counts WHERE guild=? ORDER BY invites DESC LIMIT 10').all(g.id);
-   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('📨 Invite Leaderboard').setDescription(rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — **'+r.invites+'** invites').join('\n')||'No tracked invites yet.')]});
   }
   if(c==='daily'||c==='work') {
    const a=account(g.id,u.id), now=Math.floor(Date.now()/1000);
@@ -1282,6 +1192,23 @@ Logs: <#${log.id}>`,ephemeral:true});
     .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
+  if(c==='giveaway-ping') {
+   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   try {
+    const role = await getGiveawayPingRole(g);
+    const member = await g.members.fetch(u.id);
+    if(member.roles.cache.has(role.id)) {
+     await member.roles.remove(role, 'Member opted out of Chilly giveaway notifications');
+     return i.editReply('🔕 You have opted out of one-by-one giveaway notifications.');
+    }
+    await member.roles.add(role, 'Member opted in to Chilly giveaway notifications');
+    return i.editReply('🔔 You are now opted in! Chilly will notify you once when a new giveaway starts. Use `/giveaway-ping` again to opt out.');
+   } catch(error) {
+    console.error('/giveaway-ping failed:', error?.message || error);
+    return i.editReply('❌ I could not update your notification role. Please check that Chilly has Manage Roles permission and its highest role is above Giveaway Ping.');
+   }
+  }
   if(c==='gstart') {
    const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
    const match=duration.match(/^([1-9]\d*)(m|h|d)$/);
@@ -1303,6 +1230,8 @@ Logs: <#${log.id}>`,ephemeral:true});
     await msg.reply('I could not add the entry emoji. Please check that I can use external emojis and add reactions.');
    }
    setTimeout(()=>endGiveaway(id).catch(console.error),durationMs);
+   // Notify only members who explicitly opted in with /giveaway-ping.
+   notifyGiveawaySubscribers(g, i.channel).catch(console.error);
    return;
   }
   if(c==='gend') {
