@@ -1621,73 +1621,80 @@ Good luck, everyone! ♡***`);
   }
 
   const layout = [
-   { category: '🌿・Important', channels: [
-    ['X・announces', ChannelType.GuildText],
-    ['self-role', ChannelType.GuildText],
-    ['hex', ChannelType.GuildText],
-    ['richh', ChannelType.GuildText],
-    ['rulebook', ChannelType.GuildText],
-    ['report', ChannelType.GuildText],
-    ['drops', ChannelType.GuildText]
+   { category: '☁️・Click Here ♢‼', channels: [
+    ['／lovespot・.', ChannelType.GuildText, 'lovespot']
    ]},
-   { category: '🌿・Promotions', channels: [
-    ['invite-event', ChannelType.GuildText],
-    ['invite-rules', ChannelType.GuildText],
-    ['proofs', ChannelType.GuildText],
-    ['vouches', ChannelType.GuildText],
-    ['daily-drop', ChannelType.GuildText],
-    ['event-rule', ChannelType.GuildText],
-    ['promo-info', ChannelType.GuildText],
-    ['promo-1', ChannelType.GuildText]
+   { category: '🌿・Important ?', channels: [
+    ['X・announces・🫧', ChannelType.GuildText, 'X-announces'],
+    ['+ 🍁・self・role♡', ChannelType.GuildText, 'self-role'],
+    ['+ 🌸・hex・♡', ChannelType.GuildText, 'hex'],
+    ['♧・richh・🍨・◦', ChannelType.GuildText, 'richh'],
+    ['.・rulebook・🪶', ChannelType.GuildText, 'rulebook'],
+    ['🧊・report', ChannelType.GuildText, 'report'],
+    ['ѳ・🎁drops・°', ChannelType.GuildText, 'drops']
    ]},
-   { category: '🌿・Access', channels: [
-    ['giveaway', ChannelType.GuildText],
-    ['ticket', ChannelType.GuildText],
-    ['staff-apply', ChannelType.GuildText]
+   { category: '🌿・Promotions ?', channels: [
+    ['💰・invite-event・▦', ChannelType.GuildText, 'invite-event'],
+    ['💰・invite-rules・▦', ChannelType.GuildText, 'invite-rules'],
+    ['!!💌・proofs〜・!', ChannelType.GuildText, 'proofs'],
+    ['▢・💸vouches : 𝓿', ChannelType.GuildText, 'vouches'],
+    ['.・daily・drop”・💰', ChannelType.GuildText, 'daily-drop'],
+    ['.・event・rule🧊', ChannelType.GuildText, 'event-rule'],
+    [', X・promo-info・🛍️', ChannelType.GuildText, 'promo-info'],
+    ['.・promo-1・🍷', ChannelType.GuildText, 'promo-1']
    ]},
-   { category: '💎・Pvt Access', privateRoles: ['Staff', 'Authority', 'VIP'], channels: [
-    ['Mayank-vc', ChannelType.GuildText],
-    ['Strofen-pvt', ChannelType.GuildText],
-    ['team-pvt', ChannelType.GuildText]
+   { category: '🌿・Access ?', channels: [
+    ['X・giveaway・*・🦋', ChannelType.GuildText, 'giveaway'],
+    ['🧊・ticket・°✦', ChannelType.GuildText, 'ticket'],
+    ['🧊・staff-apply・◦', ChannelType.GuildText, 'staff-apply']
    ]},
-   { category: '🌿・Staff’s Pvt', privateRoles: ['Staff', 'Authority'], channels: [
-    ['staff-vc', ChannelType.GuildText]
+   { category: '💎・pvt Access ? ✦', privateRoles: ['Staff', 'Authority', 'VIP'], channels: [
+    ['🦖・Mayank-vc・!', ChannelType.GuildText, 'Mayank-vc'],
+    ['🍁・Strofen・Pvt‼・', ChannelType.GuildText, 'Strofen-pvt'],
+    ['・team-pvt', ChannelType.GuildText, 'team-pvt']
    ]},
-   { category: '🌿・Chatting', channels: [
-    ['general-chat', ChannelType.GuildText],
-    ['lafda-chat', ChannelType.GuildText],
-    ['media-chat', ChannelType.GuildText],
-    ['commands', ChannelType.GuildText],
-    ['level-up', ChannelType.GuildText]
+   { category: '🌿・Staff’s pvt!', privateRoles: ['Staff', 'Authority'], channels: [
+    ['🔑・staff・vc', ChannelType.GuildText, 'staff-vc']
    ]},
-   { category: '🌿・Lounge Area', channels: [
-    ['verification', ChannelType.GuildText]
-   ], voice: ['Toxic VC', 'Lounge 1', 'Lounge 2', 'Lounge 3', 'Lounge 4']},
-   { category: '🌿・Pvt VC’s', channels: [
-    ['vc-controlz', ChannelType.GuildText]
-   ], voice: ['Create Your VC’s']},
-   { category: '🌵・Music & Chill', voice: [
-    'Music 1', 'Music 2', 'Music 3', 'Music 4', 'Music 5'
+   { category: '🌿・Chatting ?', channels: [
+    ['✉️♡・general-chat!・', ChannelType.GuildText, 'general-chat'],
+    ['🗣️・lafda・chat', ChannelType.GuildText, 'lafda-chat'],
+    ['//+・🕊️・media-chat', ChannelType.GuildText, 'media-chat'],
+    ['〜・commands・🥤', ChannelType.GuildText, 'commands'],
+    ['zZ・//level-up・', ChannelType.GuildText, 'level-up']
    ]},
-   { category: '🍬・Game’s', channels: [
-    ['owo', ChannelType.GuildText],
-    ['ship', ChannelType.GuildText],
-    ['truth-dare', ChannelType.GuildText],
-    ['poketwo', ChannelType.GuildText]
+   { category: '🌿・Lounge Area ?', channels: [
+    ['🍹・verification・★°', ChannelType.GuildText, 'verification']
+   ], voice: [
+    ['☁️・Toxic VC・☤', 'Toxic VC'], ['🍸・Lounge 1', 'Lounge 1'], ['🍸・Lounge 2', 'Lounge 2'],
+    ['🍸・Lounge 3', 'Lounge 3'], ['🍸・Lounge 4', 'Lounge 4']
    ]},
-   { category: '💎・PFPS / Banners', channels: [
-    ['boys-pfp', ChannelType.GuildText],
-    ['girl-pfp', ChannelType.GuildText],
-    ['couple-pfpz', ChannelType.GuildText],
-    ['banners', ChannelType.GuildText]
+   { category: '🌿・Pvt VC’s ?', channels: [
+    ['🪐・vc-controlz・𝓿', ChannelType.GuildText, 'vc-controlz']
+   ], voice: [['📞・Create Your VC’s', 'Create Your VC’s']]},
+   { category: '🌵・music & Chill ◇‼', voice: [
+    ['🥤・Music 1・℮', 'Music 1'], ['🥤・Music 2・℮', 'Music 2'], ['🥤・Music 3・℮', 'Music 3'],
+    ['🥤・Music 4・℮', 'Music 4'], ['🥤・Music 5・℮', 'Music 5']
    ]},
-   { category: '☁️・Private VCs', privateRoles: ['Staff', 'Authority', 'VIP'], voice: [
-    'Duo 1', 'Duo 2', 'Trio 1'
+   { category: '🍬・Game’s ?', channels: [
+    ['ѳ🍭・owo・', ChannelType.GuildText, 'owo'],
+    ['.・ship・🧸', ChannelType.GuildText, 'ship'],
+    ['.・truth-dare・👛', ChannelType.GuildText, 'truth-dare'],
+    ['🎀・pokétwo・૯૯', ChannelType.GuildText, 'poketwo']
+   ]},
+   { category: '💎・PFPS / BANNERS ? ✦', channels: [
+    ['<3・boys・pfp・🖐🏻', ChannelType.GuildText, 'boys-pfp'],
+    ['<3・girl・pfp・👚', ChannelType.GuildText, 'girl-pfp'],
+    ['<3・couple・pfpz・💌', ChannelType.GuildText, 'couple-pfpz'],
+    ['<3・banners・🎀', ChannelType.GuildText, 'banners']
+   ]},
+   { category: '☁️・Private VCs ✦‼', privateRoles: ['Staff', 'Authority', 'VIP'], voice: [
+    ['🍭・Duo 1', 'Duo 1'], ['🍭・Duo 2', 'Duo 2'], ['🥤・Trio 1', 'Trio 1']
    ]}
   ];
 
   const status = await message.reply('⚙️ **Lovespot setup started.** I’ll create missing roles, categories and channels; existing content will not be deleted.').catch(() => null);
-  let categoriesCreated = 0, channelsCreated = 0, skipped = 0;
+  let categoriesCreated = 0, channelsCreated = 0, channelsStyled = 0, skipped = 0;
   try {
    for (const group of layout) {
     let category = guild.channels.cache.find(ch =>
@@ -1741,15 +1748,22 @@ Good luck, everyone! ♡***`);
     }
 
     const items = [
-     ...(group.channels || []).map(([name, type]) => ({ name, type })),
-     ...(group.voice || []).map(name => ({ name, type: ChannelType.GuildVoice }))
+     ...(group.channels || []).map(([name, type, baseName]) => ({ name, baseName, type })),
+     ...(group.voice || []).map(([name, baseName]) => ({ name, baseName, type: ChannelType.GuildVoice }))
     ];
 
     for (const item of items) {
      const exists = guild.channels.cache.find(ch =>
-      ch.parentId === category.id && ch.name === item.name && ch.type === item.type
+      ch.parentId === category.id && ch.type === item.type &&
+      (ch.name === item.name || (item.baseName && ch.name === item.baseName))
      );
-     if (exists) { skipped++; continue; }
+     if (exists) {
+      if (exists.name !== item.name) {
+       await exists.edit({ name: item.name, reason: 'Apply Lovespot screenshot channel styling' });
+       channelsStyled++;
+      } else skipped++;
+      continue;
+     }
      await guild.channels.create({
       name: item.name,
       type: item.type,
@@ -1765,6 +1779,7 @@ Good luck, everyone! ♡***`);
     `• Existing roles styled: **${rolesStyled}**\n` +
     `• Categories created: **${categoriesCreated}**\n` +
     `• Channels created: **${channelsCreated}**\n` +
+    `• Existing channels styled: **${channelsStyled}**\n` +
     `• Already existed: **${skipped}**\n` +
     `• Private categories: **permissions configured**\n` +
     `Nothing existing was deleted.`;
