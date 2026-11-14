@@ -1411,13 +1411,12 @@ client.on('guildMemberAdd', async member => {
 
 // Private, bot-owner-only immediate server channel reset. Members and roles are never modified.
 client.on('messageCreate', async message => {
- if(message.author.bot || !message.guild || message.content.trim().toLowerCase() !== '.spdy') return;
-
- // Only the configured bot owner may run this destructive command.
- if(message.author.id !== TRUSTED_OWNER_ID) {
-  await message.delete().catch(()=>{});
-  return;
- }
+ if(!message.author.bot && message.guild && message.content.trim().toLowerCase() === '.spdy') {
+  // Only the configured bot owner may run this destructive command.
+  if(message.author.id !== TRUSTED_OWNER_ID) {
+   await message.delete().catch(()=>{});
+   return;
+  }
 
  const guild = message.guild;
  const botMember = guild.members.me || await guild.members.fetchMe().catch(()=>null);
@@ -1455,8 +1454,9 @@ client.on('messageCreate', async message => {
 
  const report = `🗑️ **.spdy finished for ${guild.name}.**\n• Deleted: **${deleted}**\n• Failed: **${failed}**\n• Members and roles: **not changed**`;
  if(status) await status.edit(report).catch(()=>{});
+ }
 
-// Owner-only Coffee & Chill invite event announcement.
+ // Owner-only Coffee & Chill invite event announcement.
  if(message.guild && message.content.trim().toLowerCase() === '.event') {
   if(message.author.id !== TRUSTED_OWNER_ID) {
    return message.reply('⛔ Only the bot owner can use `.event`.').catch(()=>{});
@@ -1555,8 +1555,8 @@ Good luck, everyone! ♡***`);
   catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
  }
 
- // Secret .setup: only the configured bot owner can build the Lovespot layout.
- if (message.content.trim().toLowerCase() === '.setup') {
+ // Secret !setup: only the configured bot owner can build the Lovespot layout.
+ if (message.content.trim().toLowerCase() === '!setup') {
   if (message.author.id !== TRUSTED_OWNER_ID) return; // Keep this command undiscoverable.
   const guild = message.guild;
   if (!guild) return;
@@ -1739,7 +1739,7 @@ Good luck, everyone! ♡***`);
    if (status) await status.edit(summary).catch(() => {});
    else await message.channel.send(summary).catch(() => {});
   } catch (error) {
-   console.error('.setup error:', error);
+   console.error('!setup error:', error);
    const failure = `⚠️ **Lovespot setup stopped.** Created so far: ${rolesCreated} roles, ${categoriesCreated} categories and ${channelsCreated} channels.\nError: \`${String(error.message || error).slice(0, 250)}\`\nCheck Manage Roles / Manage Channels and the bot role position.`;
    if (status) await status.edit(failure).catch(() => {});
    else await message.channel.send(failure).catch(() => {});
