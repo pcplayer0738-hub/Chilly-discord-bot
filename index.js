@@ -187,12 +187,6 @@ const commands = [
   .addIntegerOption(o=>o.setName('amount').setDescription('Coins to add').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('balance').setDescription('Check coin balance')
   .addUserOption(o=>o.setName('user').setDescription('Member')),
- new SlashCommandBuilder().setName('bank').setDescription('View your global Chilly Bank account'),
- new SlashCommandBuilder().setName('tax').setDescription('View full Chilly daily tax rules'),
- new SlashCommandBuilder().setName('deposit').setDescription('Deposit wallet coins into your global bank')
-  .addIntegerOption(o=>o.setName('amount').setDescription('Amount to deposit').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
- new SlashCommandBuilder().setName('withdraw').setDescription('Withdraw coins from your global bank')
-  .addIntegerOption(o=>o.setName('amount').setDescription('Amount to withdraw').setMinValue(1).setMaxValue(1000000000).setRequired(true)),
  new SlashCommandBuilder().setName('daily').setDescription('Claim daily coins'),
  new SlashCommandBuilder().setName('work').setDescription('Earn coins by working'),
  new SlashCommandBuilder().setName('slots').setDescription('Bet Chilly Coins on the slot machine')
@@ -348,81 +342,6 @@ function account(g,u) {
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
 }
 
-// Global daily progressive wallet + bank tax. Tier is based on combined wealth.
-// 100K-999K: fixed 1,000 wallet tax + 5% bank tax.
-// 1M-999M: 25% wallet tax + 15% bank tax.
-// 1B+: 30% wallet tax + 15% bank tax.
-const DAILY_COIN_TAX_INTERVAL = 86400;
-const DAILY_COIN_TAX_BASE_THRESHOLD = 100000;
-const DAILY_COIN_TAX_FIXED = 1000;
-const DAILY_COIN_TAX_MILLIONAIRE = 1000000;
-const DAILY_COIN_TAX_BILLIONAIRE = 1000000000;
-function runDailyCoinTax() {
- const now = Math.floor(Date.now() / 1000);
- const row = db.prepare("SELECT value FROM chilly_config WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").get();
- if (!row) {
-  db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES('__global_economy__','daily_coin_tax_last_run',?)").run(String(now));
-  console.log('💰 Daily coin tax schedule initialized.');
-  return;
- }
- const lastRun = Number(row.value) || 0;
- if (now - lastRun < DAILY_COIN_TAX_INTERVAL) return;
- const accounts = db.prepare('SELECT user, coins, bank FROM global_users WHERE coins + bank >= ?').all(DAILY_COIN_TAX_BASE_THRESHOLD);
- const notices = [];
- const result = db.transaction(() => {
-  const debit = db.prepare('UPDATE global_users SET coins=?, bank=? WHERE user=?');
-  let charged = 0;
-  let totalWalletTax = 0;
-  let totalBankTax = 0;
-  for (const a of accounts) {
-   const wealth = a.coins + a.bank;
-   let walletTax = 0;
-   let bankRate = 0;
-   let tier = '';
-   if (wealth >= DAILY_COIN_TAX_BILLIONAIRE) {
-    walletTax = Math.floor(a.coins * 0.30);
-    bankRate = 0.15;
-    tier = 'Billionaire';
-   } else if (wealth >= DAILY_COIN_TAX_MILLIONAIRE) {
-    walletTax = Math.floor(a.coins * 0.25);
-    bankRate = 0.15;
-    tier = 'Millionaire';
-   } else {
-    walletTax = DAILY_COIN_TAX_FIXED;
-    bankRate = 0.05;
-    tier = '100K+ Member';
-   }
-   const bankTax = Math.floor(a.bank * bankRate);
-   // The fixed 1,000-coin levy is collected from wallet first, then bank if needed.
-   const walletTaxPaid = Math.min(a.coins, walletTax);
-   const fixedTaxFromBank = Math.max(0, walletTax - walletTaxPaid);
-   const nextCoins = Math.max(0, a.coins - walletTaxPaid);
-   const nextBank = Math.max(0, a.bank - bankTax - fixedTaxFromBank);
-   debit.run(nextCoins, nextBank, a.user);
-   totalWalletTax += walletTaxPaid;
-   totalBankTax += bankTax + fixedTaxFromBank;
-   if (walletTaxPaid + bankTax + fixedTaxFromBank > 0) {
-    charged++;
-    notices.push({ user: a.user, tier, walletTax: walletTaxPaid, bankTax: bankTax + fixedTaxFromBank, oldWallet: a.coins, oldBank: a.bank, newWallet: nextCoins, newBank: nextBank });
-   }
-  }
-  db.prepare("UPDATE chilly_config SET value=? WHERE guild='__global_economy__' AND key='daily_coin_tax_last_run'").run(String(now));
-  return { eligible: accounts.length, charged, totalWalletTax, totalBankTax };
- })();
- console.log(`💸 Daily tax applied: ${result.charged}/${result.eligible} accounts; wallet tax ${result.totalWalletTax}, bank tax ${result.totalBankTax}.`);
- // Notify each affected member privately. A failed/closed DM does not undo the tax.
- for (const n of notices) {
-  client.users.fetch(n.user).then(user => user.send({ embeds: [chillyStyledEmbed({title:`${CHILLY_EMOJI.money} Chilly Daily Tax Notice`,description:`${CHILLY_EMOJI.success} Your daily **${n.tier}** tax has been deducted from your global Chilly account.`,footer:'Chilly • Global Economy'})
-   .addFields(
-    { name: `${CHILLY_EMOJI.wallet} Wallet tax`, value: money(n.walletTax), inline: true },
-    { name: `${CHILLY_EMOJI.bank} Bank tax`, value: money(n.bankTax), inline: true },
-    { name: `${CHILLY_EMOJI.money} Total deducted`, value: money(n.walletTax + n.bankTax), inline: false },
-    { name: `${CHILLY_EMOJI.wallet} New wallet balance`, value: money(n.newWallet), inline: true },
-    { name: `${CHILLY_EMOJI.bank} New bank balance`, value: money(n.newBank), inline: true }
-   )
-   ] })).catch(err => console.warn(`Could not DM daily tax notice to ${n.user}: ${err.message}`));
- }
-}
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
 function choose(a,n) {
  const x=[...a], r=[];
@@ -527,7 +446,7 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
 
 function chillyHelpPayload() {
  const categories = [
-  {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
+  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
   {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
   {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
   {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Security**'},
@@ -575,10 +494,6 @@ const linkPattern = /https?:\/\/|discord\.gg\//i;
 
 client.once('ready', async()=>{
  console.log('Chilly online as '+client.user.tag);
- try {
-  runDailyCoinTax();
-  setInterval(() => { try { runDailyCoinTax(); } catch (error) { console.error('Daily coin tax failed:', error); } }, 60 * 1000);
- } catch (error) { console.error('Daily coin tax initialization failed:', error); }
  client.user.setPresence({
   activities:[{name:'Powered by Spidyyy',type:ActivityType.Playing}],
   status:'online'
@@ -776,10 +691,6 @@ client.on('interactionCreate', async i=>{
    const pages = {
     economy:{title:'<:1000022218:1571576540460752937> Economy Commands',body:[
      '`/balance` — Check a member’s Chilly Coin balance.',
-     '`/bank` — View your global Chilly Bank account.',
-     '`/tax` — View the current global Chilly tax rules and your tier.',
-     '`/deposit` — Deposit wallet coins into your bank.',
-     '`/withdraw` — Withdraw bank coins into your wallet.',
      '`/daily` — Claim your daily Chilly Coin reward.',
      '`/work` — Earn Chilly Coins by working.',
      '`/slots` — Bet Chilly Coins on the slot machine.',
@@ -798,8 +709,8 @@ client.on('interactionCreate', async i=>{
      '`.withdraw [amount]` — Request an INR cash-out for manual review.'
     ].join('\n')},
     moderation:{title:'<:1000022221:1571576542683861244> Moderation Commands',body:[
-     '🛡️ **`.staff @user`** — Add a member to the Staff team.',
-     '🛡️ **`.remove staff @user`** — Remove a member from the Staff team.',
+     `${CHILLY_EMOJI.moderator} **.staff @user** — Add a member to the Staff team.`,
+     `${CHILLY_EMOJI.rejected} **.remove staff @user** — Remove a member from the Staff team.`,
      '`/warn` — Warn a server member.',
      '`/warnings` — View a member’s warnings.',
      '`/clear` — Delete recent messages.',
@@ -859,7 +770,7 @@ client.on('interactionCreate', async i=>{
     ].join('\n')}
    };
    const page=pages[i.values[0]];
-   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:'❄️ Chilly Command Center',description:'No commands are currently available in this category.'})],components:i.message.components});
+   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Chilly Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
    const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
    const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Chilly • Command Center'});
@@ -1053,50 +964,6 @@ Logs: <#${log.id}>`,ephemeral:true});
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
   }
-  if(c==='tax') {
-   const a=account(g.id,u.id);
-   const wealth=a.coins+a.bank;
-   let tier='Below 100K';
-   let walletRule='No wallet tax';
-   let bankRule='No bank tax';
-   if(wealth>=DAILY_COIN_TAX_BILLIONAIRE) {
-    tier='Billionaire'; walletRule='30% of your wallet balance'; bankRule='15% of your bank balance';
-   } else if(wealth>=DAILY_COIN_TAX_MILLIONAIRE) {
-    tier='Millionaire'; walletRule='25% of your wallet balance'; bankRule='15% of your bank balance';
-   } else if(wealth>=DAILY_COIN_TAX_BASE_THRESHOLD) {
-    tier='100K+ Member'; walletRule='Fixed 1,000 coins'; bankRule='5% of your bank balance';
-   }
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.money} Chilly Tax System • Full Details`,description:`${CHILLY_EMOJI.success} Chilly uses a **global daily tax system**. Your tier is decided by your combined **Wallet + Bank** balance across all servers using Chilly. Tax is processed automatically every 24 hours.`,footer:'Chilly • Global Economy • Tax System'}).addFields(
-     {name:`${CHILLY_EMOJI.success} Below 100K`,value:`**Wallet:** 0%\n**Bank:** 0%\nNo daily tax while your combined wealth is below 100,000 coins.`,inline:false},
-     {name:`${CHILLY_EMOJI.money} 100K–999K`,value:`**Wallet:** Fixed 1,000 coins daily\n**Bank:** 5% daily\nThe fixed 1,000-coin charge is taken from your wallet first, then from your bank if your wallet does not have enough.`,inline:false},
-     {name:`${CHILLY_EMOJI.crown} Millionaire • 1M–999M`,value:`**Wallet:** 25% daily\n**Bank:** 15% daily`,inline:false},
-     {name:`${CHILLY_EMOJI.crown2} Billionaire • 1B+`,value:`**Wallet:** 30% daily\n**Bank:** 15% daily`,inline:false},
-     {name:`${CHILLY_EMOJI.dot} Important Information`,value:`• Wallet and bank are global, not server-specific.\n• Your tax tier is based on total wallet + bank wealth before tax is deducted.\n• Bank tax is calculated from your bank balance.\n• Millionaire/Billionaire wallet tax is calculated from your wallet balance.\n• Tax is deducted automatically once every 24 hours.\n• A tax notice is sent to your DMs after a successful deduction.\n• If your DMs are closed, the tax can still be deducted; check \`/bank\` and \`/balance\` for your updated amounts.`,inline:false},
-     {name:`${CHILLY_EMOJI.wallet} Your Current Account`,value:`**Tier:** ${tier}\n**Wallet:** ${money(a.coins)}\n**Bank:** ${money(a.bank)}\n**Total Wealth:** ${money(wealth)}\n**Your Current Daily Rates:** Wallet — ${walletRule}; Bank — ${bankRule}`,inline:false}
-    );
-   return i.reply({embeds:[embed]});
-  }
-  if(c==='bank') {
-   const a=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Chilly Global Bank`,description:'Your bank account is shared across every server using Chilly.\n\n**Daily tax notice:** 100K–999K wealth: 1,000 coins + 5% bank tax. 1M–999M: 25% wallet tax + 15% bank tax. 1B+: 30% wallet tax + 15% bank tax. Tax is deducted automatically every 24 hours.',footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.wallet} Wallet`,value:money(a.coins),inline:true},{name:`${CHILLY_EMOJI.bank} Bank`,value:money(a.bank),inline:true},{name:`${CHILLY_EMOJI.money} Total Wealth`,value:money(a.coins+a.bank),inline:false});
-   return i.reply({embeds:[embed]});
-  }
-  if(c==='deposit') {
-   const amount=i.options.getInteger('amount'), a=account(g.id,u.id);
-   if(a.coins<amount) return i.reply({content:'❌ You do not have enough coins in your wallet.',ephemeral:true});
-   db.prepare('UPDATE global_users SET coins=coins-?, bank=bank+? WHERE user=?').run(amount,amount,u.id);
-   const updated=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Deposit Successful`,description:`${CHILLY_EMOJI.success} Your coins have been safely transferred to your **Global Bank**.`,footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.money} Deposited`,value:money(amount),inline:true},{name:`${CHILLY_EMOJI.bank} New Bank Balance`,value:money(updated.bank),inline:true},{name:`${CHILLY_EMOJI.wallet} Wallet Balance`,value:money(updated.coins),inline:true},{name:`${CHILLY_EMOJI.dot} Daily Tax Reminder`,value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
-   return i.reply({embeds:[embed]});
-  }
-  if(c==='withdraw') {
-   const amount=i.options.getInteger('amount'), a=account(g.id,u.id);
-   if(a.bank<amount) return i.reply({content:'❌ You do not have enough coins in your bank.',ephemeral:true});
-   db.prepare('UPDATE global_users SET bank=bank-?, coins=coins+? WHERE user=?').run(amount,amount,u.id);
-   const updated=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Withdrawal Successful`,description:`${CHILLY_EMOJI.success} Your coins have been transferred from your **Global Bank** to your wallet.`,footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.money} Withdrawn`,value:money(amount),inline:true},{name:`${CHILLY_EMOJI.wallet} New Wallet Balance`,value:money(updated.coins),inline:true},{name:`${CHILLY_EMOJI.bank} Bank Balance`,value:money(updated.bank),inline:true},{name:`${CHILLY_EMOJI.dot} Daily Tax Reminder`,value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
-   return i.reply({embeds:[embed]});
-  }
   if(c==='slots') {
    const bet=i.options.getInteger('bet'), a=account(g.id,u.id);
    if(a.coins<bet) return i.reply({content:'Not enough Chilly Coins for that bet.',ephemeral:true});
@@ -1129,7 +996,7 @@ Logs: <#${log.id}>`,ephemeral:true});
   }
   if(c==='leaderboard') {
    const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all();
-   const embed=chillyStyledEmbed({title:'🏆 Coin Leaderboard',description:rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — '+money(r.coins)).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'});
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.crown} Coin Leaderboard`,description:rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — '+money(r.coins)).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'});
    return i.reply({embeds:[embed]});
   }
   if(c==='shop') return i.reply('🛍️ **Chilly Shop**\n🍪 Cookie: 100\n☕ Coffee: 250\n👑 Golden Crown: 1000 coins\nUse `/buy`.');
@@ -1413,14 +1280,14 @@ Logs: <#${log.id}>`,ephemeral:true});
   }
   if(c==='gend') {
    const r=await endGiveaway(i.options.getString('id'));
-   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Error',description:`${CHILLY_EMOJI.rejected} ${r.error}`})],ephemeral:true});
-   return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Ended',description:`${CHILLY_EMOJI.success} The giveaway has been ended successfully.`,footer:'Chilly • Giveaways'})]});
+   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Giveaway Error`,description:r.error})],ephemeral:true});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Giveaway Ended`,description:'The giveaway has been ended successfully.',footer:'Chilly • Giveaways'})]});
   }
   if(c==='greroll') {
    const r=await endGiveaway(i.options.getString('id'),true);
-   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Error',description:`${CHILLY_EMOJI.rejected} ${r.error}`})],ephemeral:true});
+   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Giveaway Error`,description:r.error})],ephemeral:true});
    const desc=r.winners.length?`${CHILLY_EMOJI.gift} **New Winner(s):** ${r.winners.map(x=>'<@'+x+'>').join(', ')}`:`${CHILLY_EMOJI.dot} No entries were available to reroll.`;
-   return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Rerolled',description:desc,footer:'Chilly • Giveaways'})]});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Rerolled`,description:desc,footer:'Chilly • Giveaways'})]});
   }
  } catch(e) {
   console.error('Command error:',e);
@@ -2130,7 +1997,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
 
  // Friendly prefix aliases for common commands.
  const prefixRaw=message.content.trim();
- const prefixMatch=prefixRaw.match(/^\.(help|daily|work|balance|bank|pay|slots|leaderboard|shop|deposit|buy)(?:\s+(.+))?$/i);
+ const prefixMatch=prefixRaw.match(/^\.(help|daily|work|balance|pay|slots|leaderboard|shop|buy)(?:\s+(.+))?$/i);
  if(prefixMatch) {
   const cmd=prefixMatch[1].toLowerCase(), args=prefixMatch[2]||'', uid=message.author.id;
   if(cmd==='help') return message.reply(chillyHelpPayload());
@@ -2143,7 +2010,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    if(cmd==='daily') return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Daily Claim Successful`,description:`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:1000022243:1571576512547782718> **Reward:** ${money(earned)}\n<:1000022243:1571576512547782718> **Wallet:** ${money(updated.coins)}\n<:1000022243:1571576512547782718> **Next claim:** <t:${now+86400}:R>`,footer:'Chilly • Daily Rewards'})]});
    return message.reply(`${CHILLY_EMOJI.success} Work complete! You earned **${money(earned)}**. Wallet: **${money(updated.coins)}**`);
   }
-  if(cmd==='bal'||cmd==='balance'||cmd==='bank') { const a=account(message.guild.id,uid); return message.reply(`**${message.author.username}**\nWallet: **${money(a.coins)}**\nBank: **${money(a.bank)}**`); }
+  if(cmd==='bal'||cmd==='balance') { const a=account(message.guild.id,uid); return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.wallet} Chilly Wallet`,description:`${CHILLY_EMOJI.success} Here is your current Chilly Coin balance.`,footer:'Chilly • Economy'}).addFields({name:`${CHILLY_EMOJI.wallet} Wallet`,value:money(a.coins),inline:true})]}); }
   if(cmd==='pay') {
    const to=message.mentions.users.first(), amount=Number(args.match(/\b(\d+)\b/)?.[1]);
    if(!to||!Number.isSafeInteger(amount)||amount<1) return message.reply('Usage: `.pay @user 1000`');
@@ -2154,9 +2021,9 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    return message.reply(`${CHILLY_EMOJI.success} <@${uid}> sent **${money(amount)}** to <@${to.id}>.`);
   }
   if(cmd==='slots') { const amount=Number(args.match(/\b(\d+)\b/)?.[1]); if(!amount) return message.reply('Usage: `.slots 100`'); const a=account(message.guild.id,uid); if(a.coins<amount) return message.reply('Not enough Chilly Coins.'); const symbols=['🍒','🍋','🍇','⭐','🔔'],roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]); const mult=roll[0]===roll[1]&&roll[1]===roll[2]?(roll[0]==='⭐'?5:3):(roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0); const delta=mult?amount*mult:-amount; db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,uid); return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'You won **'+money(amount*mult)+'**!':'You lost **'+money(amount)+'**.')+' Wallet: **'+money(account(message.guild.id,uid).coins)+'**'); }
-  if(cmd==='leaderboard') { const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all(); return message.reply({embeds:[chillyStyledEmbed({title:'🏆 Coin Leaderboard',description:rows.map((r,n)=>`**${n+1}.** <@${r.user}> — ${money(r.coins)}`).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'})]}); }
+  if(cmd==='leaderboard') { const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all(); return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.crown} Coin Leaderboard`,description:rows.map((r,n)=>`**${n+1}.** <@${r.user}> — ${money(r.coins)}`).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'})]}); }
   if(cmd==='shop') return message.reply('**Chilly Shop**\n🍪 Cookie — 100\n☕ Coffee — 250\n👑 Golden Crown — 1,000\nUse `/buy` to purchase.');
-  if(cmd==='deposit'||cmd==='buy') return message.reply(`Use the slash command \`/${cmd}\` for this command's required options.`);
+  if(cmd==='buy') return message.reply(`Use the slash command \`/buy\` for this command's required options.`);
  }
 
  // Owner-only command to mark a manually paid real-money withdrawal request.
@@ -2181,7 +2048,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
   if(requested>available) return message.reply(`You only have **₹${(available/100).toFixed(2)}** available (including pending requests).`);
   const owner=await client.users.fetch(TRUSTED_OWNER_ID).catch(()=>null);
   if(!owner) return message.reply('I could not contact the bot owner. Please try again later.');
-  const requestEmbed=chillyStyledEmbed({title:'💸 New Chilly Withdrawal Request',description:`**Status:** Pending\n**Member:** ${message.author.tag} (<@${message.author.id}>)\n**User ID:** \`${message.author.id}\`\n**Server:** ${message.guild.name}\n**Server ID:** \`${message.guild.id}\`\n**Amount:** **₹${(requested/100).toFixed(2)}**\n**Available before request:** ₹${(available/100).toFixed(2)}\n\nUse \`.withdraw-paid REQUEST_ID\` after manually sending the reward.`,footer:'Chilly • Real Money Rewards • Manual Review'});
+  const requestEmbed=chillyStyledEmbed({title:`${CHILLY_EMOJI.money} New Chilly Withdrawal Request`,description:`**Status:** Pending\n**Member:** ${message.author.tag} (<@${message.author.id}>)\n**User ID:** \`${message.author.id}\`\n**Server:** ${message.guild.name}\n**Server ID:** \`${message.guild.id}\`\n**Amount:** **₹${(requested/100).toFixed(2)}**\n**Available before request:** ₹${(available/100).toFixed(2)}\n\nUse \`.withdraw-paid REQUEST_ID\` after manually sending the reward.`,footer:'Chilly • Real Money Rewards • Manual Review'});
   let sent; try { sent=await owner.send({embeds:[requestEmbed]}); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
   const info=db.prepare("INSERT INTO real_money_withdrawals(guild,user,amount_paise,status,created) VALUES(?,?,?,'pending',?)").run(message.guild.id,message.author.id,requested,Date.now());
   await sent.edit({embeds:[EmbedBuilder.from(requestEmbed).addFields({name:'Request ID',value:String(info.lastInsertRowid)})]}).catch(()=>{});
