@@ -429,10 +429,14 @@ const CHILLY_EMOJI = {
 };
 
 function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=true, timestamp=true, footer='Chilly • Powered by Spidyyy'}) {
- const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description);
+ const embed = new EmbedBuilder().setColor(color);
+ if (title) embed.setTitle(String(title));
+ const safeDescription = typeof description === 'string' ? description.trim() : String(description ?? '').trim();
+ // Discord rejects empty embed descriptions. Omit the field entirely when there is no text.
+ if (safeDescription) embed.setDescription(safeDescription);
  if (thumbnail) embed.setThumbnail(client.user.displayAvatarURL({size:256}));
  if (timestamp) embed.setTimestamp();
- if (footer) embed.setFooter({text:footer,iconURL:client.user.displayAvatarURL()});
+ if (footer) embed.setFooter({text:String(footer),iconURL:client.user.displayAvatarURL()});
  return embed;
 }
 
@@ -1571,7 +1575,16 @@ function makePrefixInteraction(message, parsed) {
  const sendReply=async payload=>{
   const body=typeof payload==='string'?{content:payload}:({...payload});
   delete body.ephemeral;
-  return message.reply(body);
+  // Some prefix commands (for example .clear) can delete the command message
+  // before replying. In that case Discord rejects message_reference as unknown.
+  try {
+   return await message.reply(body);
+  } catch (error) {
+   if (error?.code === 10008 || error?.rawError?.errors?.message_reference) {
+    return message.channel.send(body);
+   }
+   throw error;
+  }
  };
  return {
   commandName:parsed.commandData.name,
