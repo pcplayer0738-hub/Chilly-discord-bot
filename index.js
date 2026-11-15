@@ -1622,47 +1622,50 @@ Good luck, everyone! ♡***`);
 
   const layout = [
    { category: '☁️・Click Here ♢‼', channels: [
-    ['☑️／soulmate・.', ChannelType.GuildText, 'soulmate']
+    ['／lovespot・.', ChannelType.GuildText, 'lovespot']
    ]},
    { category: '🌿・Important ?', channels: [
-    ['X・announces・🫧', ChannelType.GuildText, 'announces'],
-    ['🍁・self・role♡', ChannelType.GuildText, 'self-role'],
-    ['🌸・hex・♡', ChannelType.GuildText, 'hex'],
-    ['♧・rich・🍨・◦', ChannelType.GuildText, 'rich'],
-    ['・rulebook・🪶', ChannelType.GuildText, 'rulebook'],
+    ['X・announces・🫧', ChannelType.GuildText, 'X-announces'],
+    ['+ 🍁・self・role♡', ChannelType.GuildText, 'self-role'],
+    ['+ 🌸・hex・♡', ChannelType.GuildText, 'hex'],
+    ['♧・richh・🍨・◦', ChannelType.GuildText, 'richh'],
+    ['.・rulebook・🪶', ChannelType.GuildText, 'rulebook'],
     ['🧊・report', ChannelType.GuildText, 'report'],
     ['ѳ・🎁drops・°', ChannelType.GuildText, 'drops']
    ]},
    { category: '🌿・Promotions ?', channels: [
     ['💰・invite-event・▦', ChannelType.GuildText, 'invite-event'],
     ['💰・invite-rules・▦', ChannelType.GuildText, 'invite-rules'],
-    ['💌・proofs〜・', ChannelType.GuildText, 'proofs'],
-    ['▢・💸vouches--𝓿', ChannelType.GuildText, 'vouches'],
-    ['・daily・drop”・💰', ChannelType.GuildText, 'daily-drop'],
-    ['・event・rule🧊', ChannelType.GuildText, 'event-rule'],
-    ['-x・promo-info・🛍️', ChannelType.GuildText, 'promo-info'],
-    ['・promo-1・🍷', ChannelType.GuildText, 'promo-1']
+    ['!!💌・proofs〜・!', ChannelType.GuildText, 'proofs'],
+    ['▢・💸vouches : 𝓿', ChannelType.GuildText, 'vouches'],
+    ['.・daily・drop”・💰', ChannelType.GuildText, 'daily-drop'],
+    ['.・event・rule🧊', ChannelType.GuildText, 'event-rule'],
+    [', X・promo-info・🛍️', ChannelType.GuildText, 'promo-info'],
+    ['.・promo-1・🍷', ChannelType.GuildText, 'promo-1']
    ]},
    { category: '🌿・Access ?', channels: [
-    ['X・giveaway・・🦋', ChannelType.GuildText, 'giveaway'],
+    ['X・giveaway・*・🦋', ChannelType.GuildText, 'giveaway'],
     ['🧊・ticket・°✦', ChannelType.GuildText, 'ticket'],
     ['🧊・staff-apply・◦', ChannelType.GuildText, 'staff-apply']
    ]},
-   { category: '💎・pvt Access ? ✦', voice: [
-    ['🍁・spidyyyy・pvt!!・', 'spidyyyy-pvt'],
-    ['🦖・rahul-vc・', 'rahul-vc'],
-    ['・team-pvt', 'team-pvt']
+   { category: '💎・pvt Access ? ✦', privateRoles: ['Staff', 'Authority', 'VIP'], channels: [
+    ['🦖・Mayank-vc・!', ChannelType.GuildText, 'Mayank-vc'],
+    ['🍁・Strofen・Pvt‼・', ChannelType.GuildText, 'Strofen-pvt'],
+    ['・team-pvt', ChannelType.GuildText, 'team-pvt']
    ]},
-   { category: '🌿・Staff’s pvt!', channels: [
+   { category: '🌿・Staff’s pvt!', privateRoles: ['Staff', 'Authority'], channels: [
     ['🔑・staff・vc', ChannelType.GuildText, 'staff-vc']
    ]},
    { category: '🌿・Chatting ?', channels: [
-    ['✉️♡・general-chat・', ChannelType.GuildText, 'general-chat'],
-    ['🕊️・media-chat', ChannelType.GuildText, 'media-chat'],
+    ['✉️♡・general-chat!・', ChannelType.GuildText, 'general-chat'],
+    ['🗣️・lafda・chat', ChannelType.GuildText, 'lafda-chat'],
+    ['//+・🕊️・media-chat', ChannelType.GuildText, 'media-chat'],
     ['〜・commands・🥤', ChannelType.GuildText, 'commands'],
-    ['zz・level-up・', ChannelType.GuildText, 'level-up']
+    ['zZ・//level-up・', ChannelType.GuildText, 'level-up']
    ]},
-   { category: '🌿・Lounge Area ?', voice: [
+   { category: '🌿・Lounge Area ?', channels: [
+    ['🍹・verification・★°', ChannelType.GuildText, 'verification']
+   ], voice: [
     ['☁️・Toxic VC・☤', 'Toxic VC'], ['🍸・Lounge 1', 'Lounge 1'], ['🍸・Lounge 2', 'Lounge 2'],
     ['🍸・Lounge 3', 'Lounge 3'], ['🍸・Lounge 4', 'Lounge 4']
    ]},
@@ -1675,22 +1678,22 @@ Good luck, everyone! ♡***`);
    ]},
    { category: '🍬・Game’s ?', channels: [
     ['ѳ🍭・owo・', ChannelType.GuildText, 'owo'],
-    ['・ship・🧸', ChannelType.GuildText, 'ship'],
-    ['・truth-dare・👛', ChannelType.GuildText, 'truth-dare'],
+    ['.・ship・🧸', ChannelType.GuildText, 'ship'],
+    ['.・truth-dare・👛', ChannelType.GuildText, 'truth-dare'],
     ['🎀・pokétwo・૯૯', ChannelType.GuildText, 'poketwo']
    ]},
    { category: '💎・PFPS / BANNERS ? ✦', channels: [
-    ['3・boys・pfp・🖐🏻', ChannelType.GuildText, 'boys-pfp'],
-    ['3・girl・pfp・👚', ChannelType.GuildText, 'girl-pfp'],
-    ['3・couple・pfpz・💌', ChannelType.GuildText, 'couple-pfpz'],
-    ['3・banners・🎀', ChannelType.GuildText, 'banners']
+    ['<3・boys・pfp・🖐🏻', ChannelType.GuildText, 'boys-pfp'],
+    ['<3・girl・pfp・👚', ChannelType.GuildText, 'girl-pfp'],
+    ['<3・couple・pfpz・💌', ChannelType.GuildText, 'couple-pfpz'],
+    ['<3・banners・🎀', ChannelType.GuildText, 'banners']
    ]},
-   { category: '☁️・Private VCs ✦‼', voice: [
+   { category: '☁️・Private VCs ✦‼', privateRoles: ['Staff', 'Authority', 'VIP'], voice: [
     ['🍭・Duo 1', 'Duo 1'], ['🍭・Duo 2', 'Duo 2'], ['🥤・Trio 1', 'Trio 1']
    ]}
   ];
 
-  const status = await message.reply('⚙️ **Lovespot setup started.** I’ll create missing roles, categories and channels; existing content will not be deleted.').catch(() => null);
+  const status = await message.reply('⚙️ **Soulmate setup started.** I’ll create missing roles, categories and channels; existing content will not be deleted.').catch(() => null);
   let categoriesCreated = 0, channelsCreated = 0, channelsStyled = 0, skipped = 0;
   try {
    for (const group of layout) {
@@ -1698,14 +1701,27 @@ Good luck, everyone! ♡***`);
      ch.type === ChannelType.GuildCategory && ch.name === group.category
     );
 
-    // Every category and channel starts private. No member roles are granted
-    // access here; the server owner can configure role permissions manually later.
-    const overwrites = [
-     {
+    const overwrites = [];
+    if (group.privateRoles) {
+     overwrites.push({
       id: guild.roles.everyone.id,
       deny: [PermissionFlagsBits.ViewChannel]
-     },
-     {
+     });
+     for (const roleName of group.privateRoles) {
+      const role = roleMap.get(roleName);
+      if (role) overwrites.push({
+       id: role.id,
+       allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.Connect,
+        PermissionFlagsBits.Speak
+       ]
+      });
+     }
+     // Keep the bot able to manage and report on its private setup channels.
+     overwrites.push({
       id: botMember.id,
       allow: [
        PermissionFlagsBits.ViewChannel,
@@ -1715,8 +1731,8 @@ Good luck, everyone! ♡***`);
        PermissionFlagsBits.Speak,
        PermissionFlagsBits.ManageChannels
       ]
-     }
-    ];
+     });
+    }
 
     if (!category) {
      category = await guild.channels.create({
@@ -1726,8 +1742,9 @@ Good luck, everyone! ♡***`);
       reason: 'Owner-only Lovespot server setup'
      });
      categoriesCreated++;
-    } else {
-     await category.permissionOverwrites.set(overwrites, 'Apply private Soulmate setup permissions');
+    } else if (group.privateRoles) {
+     // Apply privacy to an already-existing private category as well.
+     await category.permissionOverwrites.set(overwrites, 'Apply Lovespot private-category access');
     }
 
     const items = [
@@ -1742,37 +1759,35 @@ Good luck, everyone! ♡***`);
      );
      if (exists) {
       if (exists.name !== item.name) {
-       await exists.edit({ name: item.name, reason: 'Apply Soulmate screenshot channel styling' });
+       await exists.edit({ name: item.name, reason: 'Apply Lovespot screenshot channel styling' });
        channelsStyled++;
       } else skipped++;
-      await exists.permissionOverwrites.set(overwrites, 'Apply private Soulmate channel permissions');
       continue;
      }
      await guild.channels.create({
       name: item.name,
       type: item.type,
       parent: category.id,
-      permissionOverwrites: overwrites,
-      reason: 'Owner-only private Soulmate server setup'
+      reason: 'Owner-only Lovespot server setup'
      });
      channelsCreated++;
     }
    }
 
-   const summary = `✅ **Soulmate setup completed!**\n` +
+   const summary = `✅ **Lovespot setup completed!**\n` +
     `• Roles created: **${rolesCreated}**\n` +
     `• Existing roles styled: **${rolesStyled}**\n` +
     `• Categories created: **${categoriesCreated}**\n` +
     `• Channels created: **${channelsCreated}**\n` +
     `• Existing channels styled: **${channelsStyled}**\n` +
     `• Already existed: **${skipped}**\n` +
-    `• All categories and channels: **private**\n` +
+    `• Private categories: **permissions configured**\n` +
     `Nothing existing was deleted.`;
    if (status) await status.edit(summary).catch(() => {});
    else await message.channel.send(summary).catch(() => {});
   } catch (error) {
    console.error('!setup error:', error);
-   const failure = `⚠️ **Soulmate setup stopped.** Created so far: ${rolesCreated} roles, ${categoriesCreated} categories and ${channelsCreated} channels.\nError: \`${String(error.message || error).slice(0, 250)}\`\nCheck Manage Roles / Manage Channels and the bot role position.`;
+   const failure = `⚠️ **Lovespot setup stopped.** Created so far: ${rolesCreated} roles, ${categoriesCreated} categories and ${channelsCreated} channels.\nError: \`${String(error.message || error).slice(0, 250)}\`\nCheck Manage Roles / Manage Channels and the bot role position.`;
    if (status) await status.edit(failure).catch(() => {});
    else await message.channel.send(failure).catch(() => {});
   }
