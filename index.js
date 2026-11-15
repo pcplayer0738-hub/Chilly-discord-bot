@@ -412,18 +412,15 @@ function runDailyCoinTax() {
  console.log(`💸 Daily tax applied: ${result.charged}/${result.eligible} accounts; wallet tax ${result.totalWalletTax}, bank tax ${result.totalBankTax}.`);
  // Notify each affected member privately. A failed/closed DM does not undo the tax.
  for (const n of notices) {
-  client.users.fetch(n.user).then(user => user.send({ embeds: [new EmbedBuilder()
-   .setColor(0xE67E22)
-   .setTitle('<:F1:1565221539844989060> Chilly Daily Tax Notice')
-   .setDescription(`<:Redtick:1565221545453027339> Your daily **${n.tier}** tax has been deducted from your global Chilly account.`)
+  client.users.fetch(n.user).then(user => user.send({ embeds: [chillyStyledEmbed({title:`${CHILLY_EMOJI.money} Chilly Daily Tax Notice`,description:`${CHILLY_EMOJI.success} Your daily **${n.tier}** tax has been deducted from your global Chilly account.`,footer:'Chilly • Global Economy'})
    .addFields(
-    { name: '👛 Wallet tax', value: money(n.walletTax), inline: true },
-    { name: '🏦 Bank tax', value: money(n.bankTax), inline: true },
-    { name: '💰 Total deducted', value: money(n.walletTax + n.bankTax), inline: false },
-    { name: 'New wallet balance', value: money(n.newWallet), inline: true },
-    { name: 'New bank balance', value: money(n.newBank), inline: true }
+    { name: `${CHILLY_EMOJI.wallet} Wallet tax`, value: money(n.walletTax), inline: true },
+    { name: `${CHILLY_EMOJI.bank} Bank tax`, value: money(n.bankTax), inline: true },
+    { name: `${CHILLY_EMOJI.money} Total deducted`, value: money(n.walletTax + n.bankTax), inline: false },
+    { name: `${CHILLY_EMOJI.wallet} New wallet balance`, value: money(n.newWallet), inline: true },
+    { name: `${CHILLY_EMOJI.bank} New bank balance`, value: money(n.newBank), inline: true }
    )
-   .setFooter({ text: 'Chilly Economy • Daily tax applies automatically' })] })).catch(err => console.warn(`Could not DM daily tax notice to ${n.user}: ${err.message}`));
+   ] })).catch(err => console.warn(`Could not DM daily tax notice to ${n.user}: ${err.message}`));
  }
 }
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
@@ -445,7 +442,7 @@ async function endGiveaway(id, reroll=false) {
    if(g.message) {
     const m=await ch.messages.fetch(g.message).catch(()=>null);
     if(m) await m.edit({
-     embeds:[chillyStyledEmbed({title:'🎉 Giveaway Ended',description:`${CHILLY_EMOJI.dot} **Prize:** ${g.prize}\n${CHILLY_EMOJI.dot} **Winners:** ${winners.map(x=>'<@'+x+'>').join(', ')||'No entries'}\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\``,footer:'Chilly • Giveaways • Giveaway complete'})],
+     embeds:[chillyStyledEmbed({title:g.prize,description:`${CHILLY_EMOJI.success} **Giveaway ended successfully.**\n${CHILLY_EMOJI.dot} **Winners:** ${winners.map(x=>'<@'+x+'>').join(', ')||'No entries'}\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\``,footer:'Chilly • Giveaways • Giveaway complete'})],
      components:[]
     }).catch(()=>{});
    }
@@ -488,22 +485,45 @@ async function logAction(guild, embed) {
  } catch(e) { console.error('Log delivery error:',e); }
 }
 function auditEmbed(title, color, fields) {
- return new EmbedBuilder().setColor(color).setTitle(title).addFields(fields).setTimestamp();
+ return chillyStyledEmbed({title, color, footer:'Chilly • Security Logs'}).addFields(fields);
 }
 
-// Shared Chilly moderation embed style. Custom emoji IDs are from the user's server.
+// Shared Chilly embed style + custom emoji palette from the user's server emoji set.
 const CHILLY_EMOJI = {
  dm: '<:Dm:1564590774027558993>',
  arrow: '<:1000022230:1571576478452285621>',
- moderator: '<:1000022221:1571576542683861244>',
- member: '<:1000022240:1571576507070030027>',
+ moderator: '<:1000022230:1571576478452285621>',
+ member: '<:1000022232:1571576480946688539>',
  dot: '<:1000022243:1571576512547782718>',
- gift: '<:1000022218:1571576540460752937>',
+ gift: '<:1000022228:1571576466355781824>',
  success: '<:1000022223:1571576535972839504>',
- rejected: '<:Rejected:1564349876068688032>',
+ rejected: '<:1000022219:157157653362831863>',
  admin: '<:1000022221:1571576542683861244>',
- bot: '<:1000022220:1571576531216629811>'
+ bot: '<:1000022240:1571576507070030027>',
+ money: '<:1000022218:1571576540460752937>',
+ bank: '<:1000022215:1571576522895134910>',
+ wallet: '<:1000022232:1571576480946688539>',
+ security: '<:1000022221:1571576542683861244>',
+ settings: '<:1000022238:1571576502292713716>',
+ utility: '<:1000022237:1571576499876921487>',
+ fun: '<:1000022243:1571576512547782718>',
+ level: '<:1000022234:1571576486169809048>',
+ crown: '<:1000022226:1571576472857092106>',
+ crown2: '<:1000022227:1571576469438599258>',
+ music: '<:1000022225:1571576463449137183>',
+ sword: '<:1000022224:1571576459720531999>',
+ code: '<:1000022237:1571576499876921487>',
+ sparkle: '<:1000022243:1571576512547782718>',
+ ticket: '<:1000022236:1571576497175789599>',
 };
+
+function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=true, timestamp=true, footer='Chilly • Powered by Spidyyy'}) {
+ const embed = new EmbedBuilder().setColor(color).setTitle(title).setDescription(description);
+ if (thumbnail) embed.setThumbnail(client.user.displayAvatarURL({size:256}));
+ if (timestamp) embed.setTimestamp();
+ if (footer) embed.setFooter({text:footer,iconURL:client.user.displayAvatarURL()});
+ return embed;
+}
 
 function chillyHelpPayload() {
  const categories = [
@@ -532,22 +552,8 @@ function chillyHelpPayload() {
   '<:1000022241:1571576510081536081> **Links**',
   `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
  ].join('\n');
- const embed = new EmbedBuilder().setColor(0x363640)
-  .setTitle('<:1000022239:1571576504599712004> Hey, I\'m Chilly™')
-  .setDescription(description)
-  .setThumbnail(client.user.displayAvatarURL({size:256}))
-  .setFooter({text:'Chilly • Powered by Spidyyy',iconURL:client.user.displayAvatarURL()});
+ const embed = chillyStyledEmbed({title:'<:1000022239:1571576504599712004> Hey, I\'m Chilly™',description,thumbnail:true,timestamp:false,footer:'Chilly • Powered by Spidyyy'});
  return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
-}
-function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=true, timestamp=true, footer='Chilly • Powered by Spidyyy'}) {
- const embed = new EmbedBuilder()
-  .setColor(color)
-  .setTitle(title)
-  .setDescription(description);
- if (thumbnail) embed.setThumbnail(client.user.displayAvatarURL({size:256}));
- if (timestamp) embed.setTimestamp();
- embed.setFooter({text:footer,iconURL:client.user.displayAvatarURL()});
- return embed;
 }
 
 function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
@@ -702,7 +708,7 @@ client.on('interactionCreate', async i=>{
    const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
    const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(`${config.label} Ticket`).setDescription('Please describe your issue. A staff member must claim this ticket before messaging. Only the claiming staff member can chat and close it.')],components:[row]});
+   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Chilly • Tickets'})],components:[row]});
    return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
   }
   if(i.isButton()&&i.customId==='chilly_ticket_claim') {
@@ -771,6 +777,7 @@ client.on('interactionCreate', async i=>{
     economy:{title:'<:1000022218:1571576540460752937> Economy Commands',body:[
      '`/balance` — Check a member’s Chilly Coin balance.',
      '`/bank` — View your global Chilly Bank account.',
+     '`/tax` — View the current global Chilly tax rules and your tier.',
      '`/deposit` — Deposit wallet coins into your bank.',
      '`/withdraw` — Withdraw bank coins into your wallet.',
      '`/daily` — Claim your daily Chilly Coin reward.',
@@ -791,6 +798,8 @@ client.on('interactionCreate', async i=>{
      '`.withdraw [amount]` — Request an INR cash-out for manual review.'
     ].join('\n')},
     moderation:{title:'<:1000022221:1571576542683861244> Moderation Commands',body:[
+     '🛡️ **`.staff @user`** — Add a member to the Staff team.',
+     '🛡️ **`.remove staff @user`** — Remove a member from the Staff team.',
      '`/warn` — Warn a server member.',
      '`/warnings` — View a member’s warnings.',
      '`/clear` — Delete recent messages.',
@@ -851,7 +860,9 @@ client.on('interactionCreate', async i=>{
    };
    const page=pages[i.values[0]];
    if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:'❄️ Chilly Command Center',description:'No commands are currently available in this category.'})],components:i.message.components});
-   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+page.body});
+   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
+   const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
+   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Chilly • Command Center'});
    return i.update({embeds:[embed],components:i.message.components});
   }
   if(!i.isChatInputCommand()) return;
@@ -884,14 +895,14 @@ Message: ${message}`:''}`,ephemeral:true});
   if(c==='level') {
    const member=i.options.getUser('member')||u, row=getLevelRow(g.id,member.id), info=levelFromXp(row.xp);
    const rank=db.prepare('SELECT COUNT(*)+1 AS rank FROM leveling_xp WHERE guild=? AND xp>?').get(g.id,row.xp).rank;
-   const embed=new EmbedBuilder().setColor(0x77DDE7).setTitle(`🏆 ${member.username} • Level ${info.level}`).setDescription(`**XP:** ${row.xp.toLocaleString()} total\n**Progress:** ${info.progress} / ${info.required} XP\n**Server Rank:** #${rank}`).setThumbnail(member.displayAvatarURL());
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.level} ${member.username} • Level ${info.level}`,description:`${CHILLY_EMOJI.level} **XP:** ${row.xp.toLocaleString()} total\n${CHILLY_EMOJI.dot} **Progress:** ${info.progress} / ${info.required} XP\n${CHILLY_EMOJI.crown} **Server Rank:** #${rank}`,footer:'Chilly • Leveling'}).setThumbnail(member.displayAvatarURL());
    return i.reply({embeds:[embed]});
   }
   if(c==='level-leaderboard') {
    const rows=db.prepare('SELECT user,xp FROM leveling_xp WHERE guild=? ORDER BY xp DESC LIMIT 10').all(g.id);
    if(!rows.length) return i.reply({content:'No one has earned XP yet.',ephemeral:true});
    const lines=rows.map((r,index)=>{const lv=levelFromXp(r.xp).level;return `**${index+1}.** <@${r.user}> — Level **${lv}** (${r.xp.toLocaleString()} XP)`;});
-   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle('🏆 Level Leaderboard').setDescription(lines.join('\n'))]});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.crown} Level Leaderboard`,description:lines.map(x=>`${CHILLY_EMOJI.dot} ${x}`).join('\n'),footer:'Chilly • Leveling'})]});
   }
   if(c==='servericon') {
    const raw=i.options.getString('invite',true).trim();
@@ -910,7 +921,7 @@ Message: ${message}`:''}`,ephemeral:true});
     const iconRes=await fetch(iconUrl);
     if(!iconRes.ok) return i.editReply('❌ I found the server, but could not download its icon.');
     const file=new AttachmentBuilder(Buffer.from(await iconRes.arrayBuffer()),{name:`${meta.guild.id}-icon.${ext}`});
-    const embed=new EmbedBuilder().setColor(0x77DDE7).setTitle(meta.guild.name||'Server Icon').setDescription(`Server ID: \`${meta.guild.id}\`\nIcon Hash: \`${hash}\``).setImage(`attachment://${meta.guild.id}-icon.${ext}`);
+    const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} ${meta.guild.name||'Server Icon'}`,description:`${CHILLY_EMOJI.dot} **Server ID:** \`${meta.guild.id}\`\n${CHILLY_EMOJI.code} **Icon Hash:** \`${hash}\``,thumbnail:false,footer:'Chilly • Utility'}).setImage(`attachment://${meta.guild.id}-icon.${ext}`);
     return i.editReply({embeds:[embed],files:[file]});
    } catch(error) { console.error('/servericon failed:',error); return i.editReply('❌ Something went wrong while fetching that server icon.'); }
   }
@@ -1014,7 +1025,7 @@ Logs: <#${log.id}>`,ephemeral:true});
     const rows=[];
     for(let n=0;n<buttons.length;n+=5) rows.push(new ActionRowBuilder().addComponents(buttons.slice(n,n+5).map(b=>{const btn=new ButtonBuilder().setCustomId(`chilly_ticket_open:${b.ticket_key}`).setLabel(b.label).setStyle(ButtonStyle.Primary); if(b.emoji) btn.setEmoji(b.emoji); return btn;})));
     const channel=i.options.getChannel('channel');
-    await channel.send({embeds:[new EmbedBuilder().setColor(0x77DDE7).setTitle(i.options.getString('title')).setDescription(i.options.getString('description'))],components:rows});
+    await channel.send({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${i.options.getString('title')}`,description:`${CHILLY_EMOJI.dot} ${i.options.getString('description')}`,footer:'Chilly • Tickets'})],components:rows});
     return i.reply({content:`✅ Ticket panel posted in ${channel} with ${buttons.length} custom button(s).`,ephemeral:true});
    }
   }
@@ -1055,19 +1066,19 @@ Logs: <#${log.id}>`,ephemeral:true});
    } else if(wealth>=DAILY_COIN_TAX_BASE_THRESHOLD) {
     tier='100K+ Member'; walletRule='Fixed 1,000 coins'; bankRule='5% of your bank balance';
    }
-   const embed=chillyStyledEmbed({title:'<:F1:1565221539844989060> Chilly Tax System • Full Details',description:'<:Redtick:1565221545453027339> Chilly uses a **global daily tax system**. Your tier is decided by your combined **Wallet + Bank** balance across all servers using Chilly. Tax is processed automatically every 24 hours.',footer:'Chilly • Global Economy • Tax System'}).addFields(
-     {name:'🟢 Below 100K',value:`**Wallet:** 0%\n**Bank:** 0%\nNo daily tax while your combined wealth is below 100,000 coins.`,inline:false},
-     {name:'💰 100K–999K',value:`**Wallet:** Fixed 1,000 coins daily\n**Bank:** 5% daily\nThe fixed 1,000-coin charge is taken from your wallet first, then from your bank if your wallet does not have enough.`,inline:false},
-     {name:'💎 Millionaire • 1M–999M',value:`**Wallet:** 25% daily\n**Bank:** 15% daily`,inline:false},
-     {name:'👑 Billionaire • 1B+',value:`**Wallet:** 30% daily\n**Bank:** 15% daily`,inline:false},
-     {name:'📌 Important Information',value:`• Wallet and bank are global, not server-specific.\n• Your tax tier is based on total wallet + bank wealth before tax is deducted.\n• Bank tax is calculated from your bank balance.\n• Millionaire/Billionaire wallet tax is calculated from your wallet balance.\n• Tax is deducted automatically once every 24 hours.\n• A tax notice is sent to your DMs after a successful deduction.\n• If your DMs are closed, the tax can still be deducted; check \`/bank\` and \`/balance\` for your updated amounts.`,inline:false},
-     {name:'📊 Your Current Account',value:`**Tier:** ${tier}\n**Wallet:** ${money(a.coins)}\n**Bank:** ${money(a.bank)}\n**Total Wealth:** ${money(wealth)}\n**Your Current Daily Rates:** Wallet — ${walletRule}; Bank — ${bankRule}`,inline:false}
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.money} Chilly Tax System • Full Details`,description:`${CHILLY_EMOJI.success} Chilly uses a **global daily tax system**. Your tier is decided by your combined **Wallet + Bank** balance across all servers using Chilly. Tax is processed automatically every 24 hours.`,footer:'Chilly • Global Economy • Tax System'}).addFields(
+     {name:`${CHILLY_EMOJI.success} Below 100K`,value:`**Wallet:** 0%\n**Bank:** 0%\nNo daily tax while your combined wealth is below 100,000 coins.`,inline:false},
+     {name:`${CHILLY_EMOJI.money} 100K–999K`,value:`**Wallet:** Fixed 1,000 coins daily\n**Bank:** 5% daily\nThe fixed 1,000-coin charge is taken from your wallet first, then from your bank if your wallet does not have enough.`,inline:false},
+     {name:`${CHILLY_EMOJI.crown} Millionaire • 1M–999M`,value:`**Wallet:** 25% daily\n**Bank:** 15% daily`,inline:false},
+     {name:`${CHILLY_EMOJI.crown2} Billionaire • 1B+`,value:`**Wallet:** 30% daily\n**Bank:** 15% daily`,inline:false},
+     {name:`${CHILLY_EMOJI.dot} Important Information`,value:`• Wallet and bank are global, not server-specific.\n• Your tax tier is based on total wallet + bank wealth before tax is deducted.\n• Bank tax is calculated from your bank balance.\n• Millionaire/Billionaire wallet tax is calculated from your wallet balance.\n• Tax is deducted automatically once every 24 hours.\n• A tax notice is sent to your DMs after a successful deduction.\n• If your DMs are closed, the tax can still be deducted; check \`/bank\` and \`/balance\` for your updated amounts.`,inline:false},
+     {name:`${CHILLY_EMOJI.wallet} Your Current Account`,value:`**Tier:** ${tier}\n**Wallet:** ${money(a.coins)}\n**Bank:** ${money(a.bank)}\n**Total Wealth:** ${money(wealth)}\n**Your Current Daily Rates:** Wallet — ${walletRule}; Bank — ${bankRule}`,inline:false}
     );
    return i.reply({embeds:[embed]});
   }
   if(c==='bank') {
    const a=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:'🏦 Chilly Global Bank',description:'Your bank account is shared across every server using Chilly.\n\n**Daily tax notice:** 100K–999K wealth: 1,000 coins + 5% bank tax. 1M–999M: 25% wallet tax + 15% bank tax. 1B+: 30% wallet tax + 15% bank tax. Tax is deducted automatically every 24 hours.',footer:'Chilly • Global Banking'}).addFields({name:'👛 Wallet',value:money(a.coins),inline:true},{name:'🏦 Bank',value:money(a.bank),inline:true},{name:'💎 Total Wealth',value:money(a.coins+a.bank),inline:false});
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Chilly Global Bank`,description:'Your bank account is shared across every server using Chilly.\n\n**Daily tax notice:** 100K–999K wealth: 1,000 coins + 5% bank tax. 1M–999M: 25% wallet tax + 15% bank tax. 1B+: 30% wallet tax + 15% bank tax. Tax is deducted automatically every 24 hours.',footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.wallet} Wallet`,value:money(a.coins),inline:true},{name:`${CHILLY_EMOJI.bank} Bank`,value:money(a.bank),inline:true},{name:`${CHILLY_EMOJI.money} Total Wealth`,value:money(a.coins+a.bank),inline:false});
    return i.reply({embeds:[embed]});
   }
   if(c==='deposit') {
@@ -1075,7 +1086,7 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(a.coins<amount) return i.reply({content:'❌ You do not have enough coins in your wallet.',ephemeral:true});
    db.prepare('UPDATE global_users SET coins=coins-?, bank=bank+? WHERE user=?').run(amount,amount,u.id);
    const updated=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:'<:F1:1565221539844989060> Deposit Successful',description:'<:Redtick:1565221545453027339> Your coins have been safely transferred to your **Global Bank**.',footer:'Chilly • Global Banking'}).addFields({name:'📥 Deposited',value:money(amount),inline:true},{name:'🏦 New Bank Balance',value:money(updated.bank),inline:true},{name:'👛 Wallet Balance',value:money(updated.coins),inline:true},{name:'⚠️ Daily Tax Reminder',value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Deposit Successful`,description:`${CHILLY_EMOJI.success} Your coins have been safely transferred to your **Global Bank**.`,footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.money} Deposited`,value:money(amount),inline:true},{name:`${CHILLY_EMOJI.bank} New Bank Balance`,value:money(updated.bank),inline:true},{name:`${CHILLY_EMOJI.wallet} Wallet Balance`,value:money(updated.coins),inline:true},{name:`${CHILLY_EMOJI.dot} Daily Tax Reminder`,value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
    return i.reply({embeds:[embed]});
   }
   if(c==='withdraw') {
@@ -1083,7 +1094,7 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(a.bank<amount) return i.reply({content:'❌ You do not have enough coins in your bank.',ephemeral:true});
    db.prepare('UPDATE global_users SET bank=bank-?, coins=coins+? WHERE user=?').run(amount,amount,u.id);
    const updated=account(g.id,u.id);
-   const embed=chillyStyledEmbed({title:'<:F1:1565221539844989060> Withdrawal Successful',description:'<:Redtick:1565221545453027339> Your coins have been transferred from your **Global Bank** to your wallet.',footer:'Chilly • Global Banking'}).addFields({name:'📤 Withdrawn',value:money(amount),inline:true},{name:'👛 New Wallet Balance',value:money(updated.coins),inline:true},{name:'🏦 Bank Balance',value:money(updated.bank),inline:true},{name:'⚠️ Daily Tax Reminder',value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
+   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.bank} Withdrawal Successful`,description:`${CHILLY_EMOJI.success} Your coins have been transferred from your **Global Bank** to your wallet.`,footer:'Chilly • Global Banking'}).addFields({name:`${CHILLY_EMOJI.money} Withdrawn`,value:money(amount),inline:true},{name:`${CHILLY_EMOJI.wallet} New Wallet Balance`,value:money(updated.coins),inline:true},{name:`${CHILLY_EMOJI.bank} Bank Balance`,value:money(updated.bank),inline:true},{name:`${CHILLY_EMOJI.dot} Daily Tax Reminder`,value:'Your eligible wallet/bank balance is taxed automatically every 24 hours.',inline:false});
    return i.reply({embeds:[embed]});
   }
   if(c==='slots') {
@@ -1164,7 +1175,7 @@ Logs: <#${log.id}>`,ephemeral:true});
    settings(g.id);
    db.prepare(`UPDATE guild_settings SET ${feature}=? WHERE guild=?`).run(enabled?1:0,g.id);
    const names={antinuke:'Anti-nuke alerts',antiraid:'Anti-raid alerts',antilink:'Anti-link',antispam:'Anti-spam',antiabuse:'Anti-abuse'};
-   return i.reply({embeds:[new EmbedBuilder().setColor(enabled?0x2ECC71:0xE74C3C).setTitle('❄️ Chilly Security Settings').setDescription(`${enabled?'✅ Enabled':'❌ Disabled'} **${names[feature]}**.`).setFooter({text:'Chilly Security'}).setTimestamp()],ephemeral:true});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.security} Chilly Security Settings`,description:`${enabled?CHILLY_EMOJI.success+' Enabled':CHILLY_EMOJI.rejected+' Disabled'} **${names[feature]}**.`,footer:'Chilly • Security'})],ephemeral:true});
   }
   if(c==='warn') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
@@ -1179,8 +1190,7 @@ Logs: <#${log.id}>`,ephemeral:true});
   if(c==='warnings') {
    const to=i.options.getUser('user');
    const rows=db.prepare('SELECT reason,moderator,created FROM warnings WHERE guild=? AND user=? ORDER BY id DESC LIMIT 10').all(g.id,to.id);
-   return i.reply({embeds:[new EmbedBuilder().setTitle('Warnings: '+to.username)
-    .setDescription(rows.map((x,n)=>(n+1)+'. '+x.reason+' — <@'+x.moderator+'>').join('\n')||'No warnings found.')]});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.moderator} Warnings • ${to.username}`,description:rows.map((x,n)=>`${CHILLY_EMOJI.dot} **${n+1}.** ${x.reason} — <@${x.moderator}>`).join('\n')||`${CHILLY_EMOJI.success} No warnings found.`,footer:'Chilly • Moderation'})]});
   }
   if(c==='clear') {
    const n=i.options.getInteger('amount'), deleted=await i.channel.bulkDelete(n,true);
@@ -1257,16 +1267,16 @@ Logs: <#${log.id}>`,ephemeral:true});
   }
   if(c==='avatar') {
    const who=target||u;
-   return i.reply({embeds:[new EmbedBuilder().setTitle(who.username+"'s Avatar").setImage(who.displayAvatarURL({size:1024}))]});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.member} ${who.username}'s Avatar`,description:`${CHILLY_EMOJI.dot} High-resolution profile avatar.`,thumbnail:false,footer:'Chilly • Utility'}).setImage(who.displayAvatarURL({size:1024}))]});
   }
   if(c==='userinfo') {
    const who=target||u, m=await g.members.fetch(who.id).catch(()=>null);
-   const e=new EmbedBuilder().setTitle('👤 '+who.username).setThumbnail(who.displayAvatarURL())
+   const e=chillyStyledEmbed({title:`${CHILLY_EMOJI.member} ${who.username}`,description:`${CHILLY_EMOJI.dot} Discord account information.`,footer:'Chilly • Utility'}).setThumbnail(who.displayAvatarURL())
     .addFields({name:'User ID',value:who.id},{name:'Account created',value:'<t:'+Math.floor(who.createdTimestamp/1000)+':F>'});
    if(m&&m.joinedTimestamp) e.addFields({name:'Joined server',value:'<t:'+Math.floor(m.joinedTimestamp/1000)+':F>'});
    return i.reply({embeds:[e]});
   }
-  if(c==='serverinfo') return i.reply({embeds:[new EmbedBuilder().setTitle('🏠 '+g.name)
+  if(c==='serverinfo') return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} ${g.name}`,description:`${CHILLY_EMOJI.dot} Server information.`,footer:'Chilly • Utility'})
    .addFields({name:'Members',value:String(g.memberCount),inline:true},{name:'Server ID',value:g.id})]});
   if(c==='poll') {
    const m=await i.reply({content:'📊 **Poll:** '+i.options.getString('question')+'\nReact ✅ for Yes or ❌ for No.',fetchReply:true});
@@ -1390,7 +1400,7 @@ Logs: <#${log.id}>`,ephemeral:true});
     return i.reply({content:'Duration must be between `1m` and `30d`.',ephemeral:true});
    const id='CH-'+Date.now().toString(36).toUpperCase(), ends=Math.floor((Date.now()+durationMs)/1000);
    db.prepare('INSERT INTO giveaways(id,guild,channel,prize,winners,ends) VALUES(?,?,?,?,?,?)').run(id,g.id,i.channelId,prize,winners,ends);
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway • ${prize}`,description:`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> • <t:${ends}:f>\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\n${CHILLY_EMOJI.gift} React with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`,footer:'Chilly • Giveaways • React to participate'}).setTimestamp(new Date(ends*1000));
+   const embed=chillyStyledEmbed({title:prize,description:`${CHILLY_EMOJI.dot} **Winners:** ${winners}\n${CHILLY_EMOJI.dot} **Ends:** <t:${ends}:R> • <t:${ends}:f>\n${CHILLY_EMOJI.dot} **Hosted by:** <@${u.id}>\n${CHILLY_EMOJI.dot} **Giveaway ID:** \`${id}\`\n\n${CHILLY_EMOJI.gift} React with <a:Winner:${GIVEAWAY_EMOJI_ID}> to enter!`,footer:'Chilly • Giveaways • React to participate'}).setTimestamp(new Date(ends*1000));
    const msg=await i.reply({embeds:[embed],fetchReply:true});
    db.prepare('UPDATE giveaways SET message=? WHERE id=?').run(msg.id,id);
    try { await msg.react(`<a:Winner:${GIVEAWAY_EMOJI_ID}>`); }
@@ -1403,14 +1413,14 @@ Logs: <#${log.id}>`,ephemeral:true});
   }
   if(c==='gend') {
    const r=await endGiveaway(i.options.getString('id'));
-   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'❌ Giveaway Error',description:r.error})],ephemeral:true});
-   return i.reply({embeds:[chillyStyledEmbed({title:'🎉 Giveaway Ended',description:'The giveaway has been ended successfully.',footer:'Chilly • Giveaways'})]});
+   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Error',description:`${CHILLY_EMOJI.rejected} ${r.error}`})],ephemeral:true});
+   return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Ended',description:`${CHILLY_EMOJI.success} The giveaway has been ended successfully.`,footer:'Chilly • Giveaways'})]});
   }
   if(c==='greroll') {
    const r=await endGiveaway(i.options.getString('id'),true);
-   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'❌ Giveaway Error',description:r.error})],ephemeral:true});
-   const desc=r.winners.length?'🎉 **New Winner(s):** '+r.winners.map(x=>'<@'+x+'>').join(', '):'No entries were available to reroll.';
-   return i.reply({embeds:[chillyStyledEmbed({title:'🔄 Giveaway Rerolled',description:desc,footer:'Chilly • Giveaways'})]});
+   if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Error',description:`${CHILLY_EMOJI.rejected} ${r.error}`})],ephemeral:true});
+   const desc=r.winners.length?`${CHILLY_EMOJI.gift} **New Winner(s):** ${r.winners.map(x=>'<@'+x+'>').join(', ')}`:`${CHILLY_EMOJI.dot} No entries were available to reroll.`;
+   return i.reply({embeds:[chillyStyledEmbed({title:'Giveaway Rerolled',description:desc,footer:'Chilly • Giveaways'})]});
   }
  } catch(e) {
   console.error('Command error:',e);
@@ -1507,7 +1517,182 @@ client.on('guildMemberAdd', async member => {
 });
 
 // Private, bot-owner-only immediate server channel reset. Members and roles are never modified.
+
+function getStaffRole(guild) {
+ return guild.roles.cache.find(r => r.name === 'Staff ✦' || r.name === 'Staff') || null;
+}
+
+function isAuthorisedStaffManager(member) {
+ if (!member?.guild) return false;
+ if (member.id === TRUSTED_OWNER_ID || member.id === member.guild.ownerId) return true;
+ if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
+ // The existing Lovespot layout includes an Authority role; treat it as an explicit
+ // staff-management role while still respecting the role hierarchy below.
+ return member.roles.cache.some(r => r.name === 'Authority ⚑' || r.name === 'Authority');
+}
+
+async function ensureStaffRole(guild) {
+ let role = getStaffRole(guild);
+ if (role) return role;
+ const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+ if (!me?.permissions.has(PermissionFlagsBits.ManageRoles)) return null;
+ role = await guild.roles.create({
+  name: 'Staff ✦',
+  color: '#99AAB5',
+  reason: 'Create Chilly Staff role for authorised staff management'
+ }).catch(() => null);
+ return role;
+}
+
+async function sendStaffEmbed(channel, {title, description, target, actor, success=true}) {
+ const emoji = success ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected;
+ const embed = chillyStyledEmbed({
+  title: `${emoji} ${title}`,
+  description,
+  footer: 'Chilly • Staff Management'
+ });
+ if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
+ if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
+ return channel.send({embeds:[embed]}).catch(() => null);
+}
+
 client.on('messageCreate', async message => {
+ // Staff management: authorised managers only.
+ if (!message.author.bot && message.guild) {
+  const rawStaff = message.content.trim();
+  const staffAdd = rawStaff.match(/^\.staff\s+<@!?([0-9]+)>$/i);
+  const staffRemove = rawStaff.match(/^\.remove\s+staff\s+<@!?([0-9]+)>$/i);
+  if (staffAdd || staffRemove) {
+   const action = staffAdd ? 'add' : 'remove';
+   const targetId = (staffAdd || staffRemove)[1];
+   const actor = message.member;
+
+   if (!isAuthorisedStaffManager(actor)) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Access Denied',
+     description: `${CHILLY_EMOJI.rejected} You are not authorised to manage the **Staff** role.\n\n${CHILLY_EMOJI.dot} Only the **server owner**, **bot owner**, **Administrators**, or members with the **Authority** role can use this command.`,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+
+   const target = await message.guild.members.fetch(targetId).catch(() => null);
+   if (!target) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Member Not Found',
+     description: `${CHILLY_EMOJI.rejected} I couldn't find that member in this server. Please mention a valid server member.`,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+   if (target.user.bot) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Invalid Target',
+     description: `${CHILLY_EMOJI.rejected} Bots cannot be added to or removed from the Staff role.`,
+     target: target,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+
+   const staffRole = await ensureStaffRole(message.guild);
+   if (!staffRole) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Staff Role Unavailable',
+     description: `${CHILLY_EMOJI.rejected} I couldn't access or create the **Staff ✦** role. Make sure Chilly has **Manage Roles** permission.`,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+
+   const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+   if (!botMember || staffRole.position >= botMember.roles.highest.position) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Role Hierarchy Error',
+     description: `${CHILLY_EMOJI.rejected} I cannot manage the **${staffRole.name}** role because it is above or equal to my highest role. Move the Staff role below Chilly's role and try again.`,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+
+   if (target.id === message.guild.ownerId || target.roles.highest.position >= botMember.roles.highest.position) {
+    await sendStaffEmbed(message.channel, {
+     title: 'Member Hierarchy Error',
+     description: `${CHILLY_EMOJI.rejected} I cannot change roles for ${target} because that member is the server owner or has a role at/above Chilly's highest role.`,
+     target: target,
+     actor: message.author,
+     success: false
+    });
+    return;
+   }
+
+   if (action === 'add') {
+    if (target.roles.cache.has(staffRole.id)) {
+     await sendStaffEmbed(message.channel, {
+      title: 'Already Staff',
+      description: `${CHILLY_EMOJI.dot} ${target} is already part of the **Staff** team.`,
+      target: target,
+      actor: message.author,
+      success: false
+     });
+     return;
+    }
+    const added = await target.roles.add(staffRole, `Staff added by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
+    if (!added) {
+     await sendStaffEmbed(message.channel, {
+      title: 'Staff Update Failed',
+      description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role update. Check Chilly's **Manage Roles** permission and role hierarchy.`,
+      target: target,
+      actor: message.author,
+      success: false
+     });
+     return;
+    }
+    await sendStaffEmbed(message.channel, {
+     title: 'Staff Member Added',
+     description: `${CHILLY_EMOJI.success} ${target} has been added to the **Staff** team successfully.\n\n${CHILLY_EMOJI.crown2} **Staff Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
+     target: target,
+     actor: message.author,
+     success: true
+    });
+   } else {
+    if (!target.roles.cache.has(staffRole.id)) {
+     await sendStaffEmbed(message.channel, {
+      title: 'Not a Staff Member',
+      description: `${CHILLY_EMOJI.dot} ${target} does not currently have the **Staff** role.`,
+      target: target,
+      actor: message.author,
+      success: false
+     });
+     return;
+    }
+    const removed = await target.roles.remove(staffRole, `Staff removed by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
+    if (!removed) {
+     await sendStaffEmbed(message.channel, {
+      title: 'Staff Update Failed',
+      description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role removal. Check Chilly's **Manage Roles** permission and role hierarchy.`,
+      target: target,
+      actor: message.author,
+      success: false
+     });
+     return;
+    }
+    await sendStaffEmbed(message.channel, {
+     title: 'Staff Member Removed',
+     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **Staff** team successfully.\n\n${CHILLY_EMOJI.rejected} **Staff Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
+     target: target,
+     actor: message.author,
+     success: true
+    });
+   }
+   return;
+  }
+ }
  if(!message.author.bot && message.guild && message.content.trim().toLowerCase() === '.spdy') {
   // Only the configured bot owner may run this destructive command.
   if(message.author.id !== TRUSTED_OWNER_ID) {
@@ -1624,11 +1809,7 @@ Good luck, everyone! ♡***`);
   const addName = db.prepare('INSERT OR IGNORE INTO fictional_members (guild,name) VALUES (?,?)');
   for (const name of defaults) addName.run(message.guild.id, name);
   const names = db.prepare('SELECT name FROM fictional_members WHERE guild=? ORDER BY name COLLATE NOCASE').all(message.guild.id).map(row => `• ${row.name}`);
-  const embed = new EmbedBuilder()
-   .setColor(0x5865F2)
-   .setTitle('🎭 Fictional Member List')
-   .setDescription(names.join('\n') || 'No fictional names have been added.')
-   .setFooter({ text: 'Display-only list • These are not real Discord accounts or server members.' });
+  const embed = chillyStyledEmbed({title:`${CHILLY_EMOJI.member} Fictional Member List`,description:names.join('\n') || `${CHILLY_EMOJI.dot} No fictional names have been added.`,footer:'Chilly • Display-only list'});
   return message.reply({ embeds: [embed] }).catch(()=>{});
  }
  if(message.guild && message.content) {
@@ -1923,9 +2104,7 @@ Good luck, everyone! ♡***`);
   const target = message.mentions.users.first() || (message.content.trim().split(/\s+/)[1] ? await client.users.fetch(message.content.trim().split(/\s+/)[1].replace(/[<@!>]/g,'' )).catch(()=>null) : null);
   if(!target) return message.reply('Usage: `.dm @user` or `.dm USER_ID`').catch(()=>{});
   if(target.bot) return message.reply('❌ You cannot send the advertisement to a bot account.').catch(()=>{});
-  const ad = new EmbedBuilder()
-   .setColor(0xF1B735)
-   .setDescription(`Hey <@1312960418288898062>, I am **Chilly**, a multipurpose Discord bot.
+  const ad = chillyStyledEmbed({title:`${CHILLY_EMOJI.bot} Chilly • Multipurpose Discord Bot`,description:`Hey <@1312960418288898062>, I am **Chilly**, a multipurpose Discord bot.
 
 
 You have just added me to **𓂃𐙚 Coffee & Chill™ | Gwys • Fun • Social • Community • Chill** to enjoy moderation, giveaways, economy, utility and more.
@@ -1937,8 +2116,8 @@ To get started, invite Chilly to your server and use **/help** to explore the av
 🌐 **Support Server:** https://discord.gg/zFMWXFC25R
 
 
-~ Powered by Spidyyy`)
-   .setFooter({text:'Chilly • Powered by Spidyyy'});
+~ Powered by Spidyyy`,
+   footer:'Chilly • Powered by Spidyyy'});
   try {
    await target.send({embeds:[ad]});
    await message.reply(`✅ Advertisement DM sent to ${target.tag}.`).catch(()=>{});
@@ -2234,17 +2413,11 @@ client.on('guildCreate', async guild => {
   const recipient = entry?.executor || await guild.fetchOwner().then(m => m.user).catch(() => null);
   if (!recipient || recipient.bot) return;
 
-  const embed = new EmbedBuilder()
-   .setColor(0x2878E8)
-   .setTitle('Welcome 👋')
-   .setDescription(
+  const embed = chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Welcome to Chilly`,description:
     `Hi, I'm **${client.user.username}**! Thanks for adding me to your server.\n\n` +
-    `I can help with your server's **leveling, global economy, moderation, security, giveaways, tickets, welcome messages, autoroles, reaction roles, invite tracking, and utility commands**.\n\n` +
-    `Use **/help** to explore my commands and get started!`
-   )
-   .addFields({ name: 'Need help?', value: '[Join the Chilly Support Server](https://discord.gg/TFVrsdNWGx)' })
-   .setFooter({ text: `${guild.name} • Thanks for choosing Chilly!` })
-   .setTimestamp();
+    `${CHILLY_EMOJI.dot} I can help with your server's **leveling, global economy, moderation, security, giveaways, tickets, welcome messages, autoroles, reaction roles, invite tracking, and utility commands**.\n\n` +
+    `${CHILLY_EMOJI.success} Use **/help** to explore my commands and get started!`,footer:`${guild.name} • Chilly • Powered by Spidyyy`})
+   .addFields({ name: `${CHILLY_EMOJI.utility} Need help?`, value: '[Join the Chilly Support Server](https://discord.gg/TFVrsdNWGx)' });
 
   const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
