@@ -76,15 +76,6 @@ CREATE TABLE IF NOT EXISTS real_money_users (
  PRIMARY KEY(guild,user)
 );
 `);
-db.exec(`
-CREATE TABLE IF NOT EXISTS reward_withdrawals (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- guild TEXT NOT NULL, user TEXT NOT NULL,
- amount_paise INTEGER NOT NULL,
- status TEXT NOT NULL DEFAULT 'pending',
- created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-);
-`);
 // Import existing server-specific balances/items once. Coins and item quantities are summed;
 // cooldown timestamps use MAX so switching servers cannot bypass a cooldown.
 if (!db.prepare("SELECT 1 FROM chilly_config WHERE guild='__global_economy__' AND key='migration_v1'").get()) {
@@ -1871,31 +1862,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
  }
  if(!message.guild) return;
 
- // Withdrawal requests: minimum ₹100. Requests are sent to the configured bot owner for manual review.
- if(/^\.withdraw$/i.test(message.content.trim())) {
-  const guildId=message.guild.id, userId=message.author.id;
-  db.prepare('INSERT OR IGNORE INTO real_money_users(guild,user) VALUES(?,?)').run(guildId,userId);
-  const acct=db.prepare('SELECT earned_paise,paid_paise FROM real_money_users WHERE guild=? AND user=?').get(guildId,userId);
-  const available=Math.max(0,acct.earned_paise-acct.paid_paise);
-  if(available<10000) return message.reply(`❌ Minimum withdrawal is **₹100.00**. Your available balance is **₹${(available/100).toFixed(2)}**.`).catch(()=>{});
-  const pending=db.prepare("SELECT id FROM reward_withdrawals WHERE guild=? AND user=? AND status='pending'").get(guildId,userId);
-  if(pending) return message.reply(`⏳ You already have a pending withdrawal request (#${pending.id}).`).catch(()=>{});
-  const result=db.prepare("INSERT INTO reward_withdrawals(guild,user,amount_paise,status) VALUES(?,?,?,'pending')").run(guildId,userId,available);
-  try {
-   const owner=await client.users.fetch(TRUSTED_OWNER_ID);
-   const embed=new EmbedBuilder().setColor(0x77DDE7).setTitle('💸 New Withdrawal Request')
-    .setDescription(`**Request:** #${result.lastInsertRowid}\n**Member:** <@${userId}> (\`${userId}\`)\n**Server:** ${message.guild.name} (\`${guildId}\`)\n**Amount requested:** ₹${(available/100).toFixed(2)}\n**Status:** Pending manual review`)
-    .setFooter({text:'Chilly • Review and verify before marking as paid'});
-   await owner.send({embeds:[embed]});
-  } catch(error) {
-   db.prepare('DELETE FROM reward_withdrawals WHERE id=?').run(result.lastInsertRowid);
-   console.error('Could not deliver withdrawal request to bot owner:',error);
-   return message.reply('❌ Could not send your request to the bot owner. Please contact server staff.').catch(()=>{});
-  }
-  return message.reply(`✅ Withdrawal request **#${result.lastInsertRowid}** for **₹${(available/100).toFixed(2)}** sent for manual review. Your balance has not been deducted.`).catch(()=>{});
- }
-
- // Real-money reward commands: .rich, .bal [@member], .prof [@member], .rank [@member].
+ // Real-money reward commands: .rich, .bal [@member], .prof/.rank [@member].
  const rewardCommand = message.content.trim().match(/^\.(rich|bal|prof|rank)(?:\s+(.+))?$/i);
  if(rewardCommand) {
   const requestedCommand = rewardCommand[1].toLowerCase();
@@ -2039,7 +2006,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    return message.reply({files:[attachment]}).catch(()=>{});
   } catch(error) {
    console.error('Real-money card render failed:',error);
-   return message.reply('❌ Could not generate the reward card. Make sure `@napi-rs/canvas` is installed in the bot dependencies.').catch(()=>{});
+   return message.reply('❌ Reward card failed to render. Check the FadeHost install log for `@napi-rs/canvas` and confirm the package installed successfully.').catch(()=>{});
   }
  }
 
