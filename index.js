@@ -367,7 +367,7 @@ async function endGiveaway(id, reroll=false) {
    }
    if(winners.length) {
     await ch.send({
-     content:'🎉 '+CHILLY_EMOJI.gift+' Congratulations '+winners.map(x=>'<@'+x+'>').join(', ')+'! You won **'+g.prize+'**!\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
+     content:'🎉 '+CHILLY_EMOJI.gift+' Congratulations '+winners.map(x=>'<@'+x+'>').join(', ')+'! You won **'+g.prize+'**!',
      allowedMentions:{users:winners}
     }).catch(()=>{});
    } else {
@@ -377,16 +377,8 @@ async function endGiveaway(id, reroll=false) {
  } else {
   const ch=await client.channels.fetch(g.channel).catch(()=>null);
   if(ch && winners.length) await ch.send({
-   content:'🎉 '+CHILLY_EMOJI.gift+' New giveaway winner(s): '+winners.map(x=>'<@'+x+'>').join(', ')+'! Prize: **'+g.prize+'**.\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
+   content:'🎉 '+CHILLY_EMOJI.gift+' New giveaway winner(s): '+winners.map(x=>'<@'+x+'>').join(', ')+'! Prize: **'+g.prize+'**.',
    allowedMentions:{users:winners}
-  }).catch(()=>{});
- }
- // DM every winner and explicitly mention them in the message.
- for(const winnerId of winners) {
-  const user=await client.users.fetch(winnerId).catch(()=>null);
-  if(user) await user.send({
-   content:'🎉 You Won the giveaway! <@'+winnerId+'>\n'+CHILLY_EMOJI.gift+' Prize: **'+g.prize+'**\n'+CHILLY_EMOJI.gift+' Open a ticket to claim the reward!',
-   allowedMentions:{users:[winnerId]}
   }).catch(()=>{});
  }
  return {winners};
@@ -868,8 +860,10 @@ Message: ${message}`:''}`,ephemeral:true});
    const message=i.options.getString('message');
    if(!channel || !channel.isTextBased() || !channel.send) return i.reply({content:'Please use this command in a text channel or select a text channel.',ephemeral:true});
    const botMember = g.members.me;
-   if(!botMember || !channel.permissionsFor(botMember)?.has(PermissionFlagsBits.SendMessages)) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
-   await channel.send({content:message, allowedMentions:{parse:[]}});
+   const botPerms = botMember && channel.permissionsFor(botMember);
+   if(!botPerms?.has(PermissionFlagsBits.SendMessages)) return i.reply({content:'I cannot send messages in that channel. Check my permissions.',ephemeral:true});
+   if(!botPerms.has(PermissionFlagsBits.MentionEveryone)) return i.reply({content:'I need the Mention Everyone permission in that channel to ping @everyone, @here, or non-mentionable roles.',ephemeral:true});
+   await channel.send({content:message, allowedMentions:{parse:['everyone','roles','users']}});
    return i.reply({content:'✅ Message sent in '+channel+'.',ephemeral:true});
   }
   if(c==='whitelist') {
