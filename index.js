@@ -1888,9 +1888,12 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    const canvas = createCanvas(kind === 'rich' ? 1500 : 1500, kind === 'rich' ? 1050 : 650);
    const ctx = canvas.getContext('2d');
    const W=canvas.width, H=canvas.height;
+   // Use the basic Canvas fillRect API for maximum compatibility with
+   // @napi-rs/canvas versions on Linux hosts. Avoid roundRect/strokeStyle,
+   // which caused InvalidArg in the hosted renderer.
    const rr=(x,y,w,h,r,fill,stroke=null,lw=2)=>{
-    ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fillStyle=fill; ctx.fill();
-    if(stroke){ctx.lineWidth=lw;ctx.strokeStyle=stroke;ctx.stroke();}
+    ctx.fillStyle=String(fill || '#25252d');
+    ctx.fillRect(Number(x),Number(y),Math.max(0,Number(w)),Math.max(0,Number(h)));
    };
    const txt=(value,x,y,size=28,color='#f4f2fa',weight='600',align='left')=>{
     ctx.font=`${weight} ${size}px Arial`;ctx.fillStyle=color;ctx.textAlign=align;ctx.fillText(String(value),x,y);
