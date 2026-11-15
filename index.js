@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS real_money_users (
  PRIMARY KEY(guild,user)
 );
 `);
+// Cash-out requests are sent to the configured bot owner for manual review.
+db.exec(`CREATE TABLE IF NOT EXISTS real_money_withdrawals (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, guild TEXT NOT NULL, user TEXT NOT NULL,
+ amount_paise INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created INTEGER NOT NULL
+);`);
 // Import existing server-specific balances/items once. Coins and item quantities are summed;
 // cooldown timestamps use MAX so switching servers cannot bypass a cooldown.
 if (!db.prepare("SELECT 1 FROM chilly_config WHERE guild='__global_economy__' AND key='migration_v1'").get()) {
@@ -722,26 +727,18 @@ client.on('interactionCreate', async i=>{
   }
   if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
    const pages = {
-    aichat:{title:'AI Chat',body:'No AI chat slash command is currently configured in this build.'},
-    antinuke:{title:'AntiNuke',body:'`/security` — Configure Chilly security protections. Whitelist management: `/whitelist add_user`, `/whitelist add_channel`, `/whitelist add_role`, `/whitelist remove_user`, `/whitelist remove_channel`, `/whitelist remove_role`, `/whitelist view_users`, `/whitelist view_channels`, `/whitelist view_roles`.'},
-    automod:{title:'Automod',body:'Automod commands are not currently configured in this build.'},
-    credits:{title:'Credits',body:'`/balance` · `/bank` · `/deposit` · `/withdraw` · `/daily` · `/work` · `/slots` · `/pay` · `/leaderboard` · `/shop` · `/buy` · `/inventory` · `/money`'},
-    giveawaycog:{title:'GiveawayCog',body:'`/gstart` · `/gend` · `/greroll`'},
-    jail:{title:'Jail',body:'`/jail-setup` · `/jail` · `/unjail`'},
-    logs:{title:'Logs',body:'`/setlogs` — Configure the server log channel.'},
-    misc:{title:'Misc',body:'`/ping` · `/help` · `/say` · `/8ball` · `/coinflip` · `/dice` · `/rps` · `/joke` · `/ship` · `/poll` · `/remind`'},
-    moderation:{title:'Moderation',body:'`/warn` · `/warnings` · `/clear` · `/timeout` · `/untimeout` · `/kick` · `/ban` · `/unban`. Each command requires its relevant Discord permission.'},
-    np:{title:'NP',body:'No NP commands are currently configured in this build.'},
-    reqrolecog:{title:'ReqRoleCog',body:'Role-request commands are not currently configured in this build.'},
-    reset:{title:'Reset',body:'No reset command is currently configured in this build.'},
-    responders:{title:'Responders',body:'Responder commands are not currently configured in this build.'},
-    tickets:{title:'Tickets',body:'`/ticket-setup` — Customize panel channel, title, description and support role. Use the Create Ticket button to open private tickets.'},
-    utility:{title:'Utility',body:'`/avatar` · `/userinfo` · `/serverinfo` · `/calculator`'},
-    vchelp:{title:'VC Help',body:'Music commands registered: `/play` · `/skip` · `/pause` · `/resume` · `/stop` · `/queue` · `/leave`. YouTube playback still needs voice provider integration.'},
-    welcomer:{title:'Welcomer',body:'`/welcome-setup` — Set the welcome channel and message. Placeholders: `{user}` and `{server}`.'}
+    economy:{title:'Economy',body:'<:Bluegift:1564349870385406062> `/balance` `/bank` `/deposit` `/withdraw` `/daily` `/work` `/slots` `/pay` `/leaderboard` `/shop` `/buy` `/inventory` `/money`\n\n<:Bluedot:1564349885841408293> Prefix: `.bal` `.daily` `.work` `.pay @user 1000`'},
+    rewards:{title:'Real Money Rewards',body:'<:Whitetick:1564349880766304456> `.bal` `.prof` `.rank` `.rich` `.withdraw [amount]`\n\n<:Bluedot:1564349885841408293> Minimum cash-out: **₹100**. Requests are sent to the bot owner by DM for manual review.'},
+    moderation:{title:'Moderation',body:'<:Admin:1564349896402669708> `/warn` `/warnings` `/clear` `/timeout` `/untimeout` `/kick` `/ban` `/unban` `/jail` `/unjail`'},
+    security:{title:'Security',body:'<:Bot:1564349898709540974> `/security` `/whitelist` `/steal` `/autoreact`'},
+    giveaways:{title:'Giveaways',body:'<:Bluegift:1564349870385406062> `/gstart` `/gend` `/greroll`'},
+    fun:{title:'Fun',body:'<:Members:1564349878472015984> `/8ball` `/coinflip` `/dice` `/rps` `/joke` `/ship`'},
+    utility:{title:'Utility',body:'<:Arrow:1564590038396833812> `/ping` `/avatar` `/userinfo` `/serverinfo` `/servericon` `/poll` `/calculator` `/remind` `/say`'},
+    setup:{title:'Server Setup',body:'<:Admin:1564349896402669708> `/ticket-setup` `/welcome-setup` `/jail-setup` `/setlogs` `/auto-role` `/role-all` `/role-colour` `/reaction-role`'},
+    leveling:{title:'Leveling',body:'<:Members:1564349878472015984> `/level` `/level-leaderboard` `/levelup-setup` `/levelrole`'}
    };
-   const page=pages[i.values[0]]||pages.misc;
-   return i.update({embeds:[new EmbedBuilder().setColor(0x77DDE7).setAuthor({name:'Chilly • Help Center',iconURL:client.user.displayAvatarURL()}).setTitle('<:F1:1565221539844989060> '+page.title).setDescription('<:Redtick:1565221545453027339> '+page.body).setFooter({text:'Chilly Bot • Select another category below'})]});
+   const page=pages[i.values[0]]||pages.economy;
+   return i.update({embeds:[new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle(`${page.title} Commands`).setDescription(page.body).setFooter({text:'Chilly • Powered by Spidyyy'})]});
   }
   if(!i.isChatInputCommand()) return;
   const c=i.commandName, u=i.user, g=i.guild;
@@ -927,26 +924,19 @@ Logs: <#${log.id}>`,ephemeral:true});
   }
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
   if(c==='help') {
-   const red={id:'1565221545453027339',name:'Redtick'};
-   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Select category').addOptions(
-    {label:'aichat',description:'AI chat commands',value:'aichat',emoji:red},
-    {label:'AntiNuke',description:'Security and whitelist tools',value:'antinuke',emoji:red},
-    {label:'Automod',description:'Automatic moderation',value:'automod',emoji:red},
-    {label:'Credits',description:'Chilly Coins and economy',value:'credits',emoji:red},
-    {label:'GiveawayCog',description:'Giveaway tools',value:'giveawaycog',emoji:red},
-    {label:'jail',description:'Jail tools',value:'jail',emoji:red},
-    {label:'Logs',description:'Server logs',value:'logs',emoji:red},
-    {label:'Misc',description:'General and fun commands',value:'misc',emoji:red},
-    {label:'Moderation',description:'Moderation commands',value:'moderation',emoji:red},
-    {label:'np',description:'NP commands',value:'np',emoji:red},
-    {label:'ReqRoleCog',description:'Role requests',value:'reqrolecog',emoji:red},
-    {label:'Reset',description:'Reset tools',value:'reset',emoji:red},
-    {label:'Responders',description:'Automatic responders',value:'responders',emoji:red},
-    {label:'tickets',description:'Ticket tools',value:'tickets',emoji:red},
-    {label:'utility',description:'Utility commands',value:'utility',emoji:red},
-    {label:'Welcomer',description:'Welcome tools',value:'welcomer',emoji:red}
+   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Choose a command category').addOptions(
+    {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1564349870385406062',name:'Bluegift'}},
+    {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1564349880766304456',name:'Whitetick'}},
+    {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1564349896402669708',name:'Admin'}},
+    {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1564349898709540974',name:'Bot'}},
+    {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1564349870385406062',name:'Bluegift'}},
+    {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1564349878472015984',name:'Members'}},
+    {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1564590038396833812',name:'Arrow'}},
+    {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1564349896402669708',name:'Admin'}},
+    {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1564349878472015984',name:'Members'}}
    );
-   return i.reply({embeds:[new EmbedBuilder().setColor(0x77DDE7).setAuthor({name:'Chilly • Help Center',iconURL:client.user.displayAvatarURL()}).setTitle('<:F1:1565221539844989060> Chilly Help').setDescription('Browse all available Chilly commands by category.\n\n<:Redtick:1565221545453027339> **Categories**\nSelect a category below to view its commands.').setFooter({text:'Chilly Bot • Powered by Spidyyy'})],components:[new ActionRowBuilder().addComponents(menu)]});
+   const embed=new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle('Welcome to Chilly').setDescription('A multipurpose Discord bot for your community.\n\n<:Bluegift:1564349870385406062> **Choose a category** below to explore available commands.\n<:Bluedot:1564349885841408293> **Prefix:** `.`\n<:Whitetick:1564349880766304456> **Examples:** `.help` • `.daily` • `.pay @user 1000`').setFooter({text:'Chilly • Powered by Spidyyy'});
+   return i.reply({embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]});
   }
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
@@ -1014,9 +1004,11 @@ Logs: <#${log.id}>`,ephemeral:true});
    const a=account(g.id,u.id), now=Math.floor(Date.now()/1000);
    const col=c==='daily'?'daily':'worked', cd=c==='daily'?86400:3600;
    const amount=c==='daily'?500:Math.floor(Math.random()*201)+100;
-   if(now-a[col]<cd) return i.reply({content:'Try again in '+Math.ceil((cd-(now-a[col]))/60)+' minutes.',ephemeral:true});
+   if(now-a[col]<cd) { const next=now+(cd-(now-a[col])); return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setTitle(`${CHILLY_EMOJI.gift} ${c==='daily'?'Daily Reward':'Work Cooldown'}`).setDescription(`${CHILLY_EMOJI.dot} You can claim again <t:${next}:R>.`).setFooter({text:'Chilly Economy'})],ephemeral:true}); }
    db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(amount,now,u.id);
-   return i.reply('❄️ You earned **'+money(amount)+'**!');
+   const updated=account(g.id,u.id);
+   if(c==='daily') return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:Bluedot:1564349885841408293> **Reward:** ${money(amount)}\n<:Bluedot:1564349885841408293> **Wallet:** ${money(updated.coins)}\n<:Bluedot:1564349885841408293> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
+   return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setTitle(`${CHILLY_EMOJI.success} Work Complete`).setDescription(`You earned **${money(amount)}**.\nWallet: **${money(updated.coins)}**`).setFooter({text:'Chilly Economy'})]});
   }
   if(c==='pay') {
    const to=i.options.getUser('user'), amount=i.options.getInteger('amount');
@@ -1862,6 +1854,80 @@ To get started, invite Chilly to your server and use **/help** to explore the av
  }
  if(!message.guild) return;
 
+ // Friendly prefix aliases for common commands.
+ const prefixRaw=message.content.trim();
+ const prefixMatch=prefixRaw.match(/^\.(help|daily|work|balance|bank|pay|slots|leaderboard|shop|deposit|buy)(?:\s+(.+))?$/i);
+ if(prefixMatch) {
+  const cmd=prefixMatch[1].toLowerCase(), args=prefixMatch[2]||'', uid=message.author.id;
+  if(cmd==='help') {
+   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Choose a command category').addOptions(
+    {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1564349870385406062',name:'Bluegift'}},
+    {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1564349880766304456',name:'Whitetick'}},
+    {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1564349896402669708',name:'Admin'}},
+    {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1564349898709540974',name:'Bot'}},
+    {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1564349870385406062',name:'Bluegift'}},
+    {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1564349878472015984',name:'Members'}},
+    {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1564590038396833812',name:'Arrow'}},
+    {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1564349896402669708',name:'Admin'}},
+    {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1564349878472015984',name:'Members'}}
+   );
+   const embed=new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle('Welcome to Chilly').setDescription('A multipurpose Discord bot for your community.\n\n<:Bluegift:1564349870385406062> **Choose a category** below to explore available commands.\n<:Bluedot:1564349885841408293> **Prefix:** `.`\n<:Whitetick:1564349880766304456> **Examples:** `.help` • `.daily` • `.pay @user 1000`').setFooter({text:'Chilly • Powered by Spidyyy'});
+   return message.reply({embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]});
+  }
+  if(cmd==='daily'||cmd==='work') {
+   const a=account(message.guild.id,uid),now=Math.floor(Date.now()/1000),col=cmd==='daily'?'daily':'worked',cd=cmd==='daily'?86400:3600;
+   if(now-a[col]<cd) return message.reply(`${CHILLY_EMOJI.dot} You can claim again <t:${now+(cd-(now-a[col]))}:R>.`);
+   const earned=cmd==='daily'?500:Math.floor(Math.random()*201)+100;
+   db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(earned,now,uid);
+   const updated=account(message.guild.id,uid);
+   if(cmd==='daily') return message.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:Bluedot:1564349885841408293> **Reward:** ${money(earned)}\n<:Bluedot:1564349885841408293> **Wallet:** ${money(updated.coins)}\n<:Bluedot:1564349885841408293> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
+   return message.reply(`${CHILLY_EMOJI.success} Work complete! You earned **${money(earned)}**. Wallet: **${money(updated.coins)}**`);
+  }
+  if(cmd==='bal'||cmd==='balance'||cmd==='bank') { const a=account(message.guild.id,uid); return message.reply(`**${message.author.username}**\nWallet: **${money(a.coins)}**\nBank: **${money(a.bank)}**`); }
+  if(cmd==='pay') {
+   const to=message.mentions.users.first(), amount=Number(args.match(/\b(\d+)\b/)?.[1]);
+   if(!to||!Number.isSafeInteger(amount)||amount<1) return message.reply('Usage: `.pay @user 1000`');
+   if(to.bot||to.id===uid) return message.reply('Choose another non-bot member.');
+   const a=account(message.guild.id,uid); account(message.guild.id,to.id);
+   if(a.coins<amount) return message.reply('Not enough Chilly Coins.');
+   db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(amount,uid);db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);})();
+   return message.reply(`${CHILLY_EMOJI.success} <@${uid}> sent **${money(amount)}** to <@${to.id}>.`);
+  }
+  if(cmd==='slots') { const amount=Number(args.match(/\b(\d+)\b/)?.[1]); if(!amount) return message.reply('Usage: `.slots 100`'); const a=account(message.guild.id,uid); if(a.coins<amount) return message.reply('Not enough Chilly Coins.'); const symbols=['🍒','🍋','🍇','⭐','🔔'],roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]); const mult=roll[0]===roll[1]&&roll[1]===roll[2]?(roll[0]==='⭐'?5:3):(roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0); const delta=mult?amount*mult:-amount; db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,uid); return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'You won **'+money(amount*mult)+'**!':'You lost **'+money(amount)+'**.')+' Wallet: **'+money(account(message.guild.id,uid).coins)+'**'); }
+  if(cmd==='leaderboard') { const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all(); return message.reply({embeds:[new EmbedBuilder().setColor(0x7138A8).setTitle('Chilly Coin Leaderboard').setDescription(rows.map((r,n)=>`**${n+1}.** <@${r.user}> — ${money(r.coins)}`).join('\n')||'No users yet.')]}); }
+  if(cmd==='shop') return message.reply('**Chilly Shop**\n🍪 Cookie — 100\n☕ Coffee — 250\n👑 Golden Crown — 1,000\nUse `/buy` to purchase.');
+  if(cmd==='deposit'||cmd==='buy') return message.reply(`Use the slash command \`/${cmd}\` for this command's required options.`);
+ }
+
+ // Owner-only command to mark a manually paid real-money withdrawal request.
+ if(prefixRaw.toLowerCase().startsWith('.withdraw-paid ')) {
+  if(message.author.id!==TRUSTED_OWNER_ID) return message.reply('This command is restricted to the bot owner.');
+  const id=Number(prefixRaw.split(/\s+/)[1]); if(!Number.isInteger(id)||id<1) return message.reply('Usage: `.withdraw-paid REQUEST_ID`');
+  const req=db.prepare("SELECT * FROM real_money_withdrawals WHERE id=? AND status='pending'").get(id);
+  if(!req) return message.reply('Pending withdrawal request not found.');
+  db.transaction(()=>{db.prepare('UPDATE real_money_users SET paid_paise=paid_paise+? WHERE guild=? AND user=?').run(req.amount_paise,req.guild,req.user);db.prepare("UPDATE real_money_withdrawals SET status='paid' WHERE id=?").run(id);})();
+  const requester=await client.users.fetch(req.user).catch(()=>null); if(requester) await requester.send(`Your Chilly withdrawal request **#${id}** for **₹${(req.amount_paise/100).toFixed(2)}** has been marked as paid. Thank you!`).catch(()=>{});
+  return message.reply(`Marked request #${id} as paid: ₹${(req.amount_paise/100).toFixed(2)}.`);
+ }
+
+ // Real-money withdrawal requests are sent privately to the bot owner.
+ if(/^\.withdraw(?:\s+\d+(?:\.\d{1,2})?)?$/i.test(prefixRaw)) {
+  const accountRow=db.prepare('SELECT * FROM real_money_users WHERE guild=? AND user=?').get(message.guild.id,message.author.id) || {earned_paise:0,paid_paise:0};
+  const pending=db.prepare("SELECT COALESCE(SUM(amount_paise),0) AS total FROM real_money_withdrawals WHERE guild=? AND user=? AND status='pending'").get(message.guild.id,message.author.id).total;
+  const available=Math.max(0,accountRow.earned_paise-accountRow.paid_paise-pending);
+  const rawAmount=prefixRaw.split(/\s+/)[1];
+  const requested=rawAmount?Math.round(Number(rawAmount)*100):available;
+  if(!Number.isSafeInteger(requested)||requested<10000) return message.reply(`Minimum withdrawal is **₹100**. Your available balance is **₹${(available/100).toFixed(2)}**.`);
+  if(requested>available) return message.reply(`You only have **₹${(available/100).toFixed(2)}** available (including pending requests).`);
+  const owner=await client.users.fetch(TRUSTED_OWNER_ID).catch(()=>null);
+  if(!owner) return message.reply('I could not contact the bot owner. Please try again later.');
+  const requestEmbed=new EmbedBuilder().setColor(0x7138A8).setTitle('New Chilly Withdrawal Request').setDescription(`**Request:** Pending\n**Member:** ${message.author.tag} (<@${message.author.id}>)\n**User ID:** \`${message.author.id}\`\n**Server:** ${message.guild.name}\n**Server ID:** \`${message.guild.id}\`\n**Amount:** **₹${(requested/100).toFixed(2)}**\n**Available before request:** ₹${(available/100).toFixed(2)}\n\nUse \`.withdraw-paid REQUEST_ID\` after manually sending the reward.`).setTimestamp();
+  let sent; try { sent=await owner.send({embeds:[requestEmbed]}); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
+  const info=db.prepare("INSERT INTO real_money_withdrawals(guild,user,amount_paise,status,created) VALUES(?,?,?,'pending',?)").run(message.guild.id,message.author.id,requested,Date.now());
+  await sent.edit({embeds:[EmbedBuilder.from(requestEmbed).addFields({name:'Request ID',value:String(info.lastInsertRowid)})]}).catch(()=>{});
+  return message.reply(`${CHILLY_EMOJI.success} Your withdrawal request **#${info.lastInsertRowid}** for **₹${(requested/100).toFixed(2)}** has been sent to the bot owner by DM. It is pending manual review; no payment is automatic.`);
+ }
+
  // Real-money reward commands: .rich, .bal [@member], .prof/.rank [@member].
  const rewardCommand = message.content.trim().match(/^\.(rich|bal|prof|rank)(?:\s+(.+))?$/i);
  if(rewardCommand) {
@@ -1878,7 +1944,8 @@ To get started, invite Chilly to your server and use **/help** to explore the av
   };
   const rupee = paise => '₹' + (paise / 100).toFixed(2);
   const accountRow = ensureRewardAccount(target.id);
-  const available = Math.max(0, accountRow.earned_paise - accountRow.paid_paise);
+  const pendingPaise = db.prepare("SELECT COALESCE(SUM(amount_paise),0) AS total FROM real_money_withdrawals WHERE guild=? AND user=? AND status='pending'").get(guildId,target.id).total;
+  const available = Math.max(0, accountRow.earned_paise - accountRow.paid_paise - pendingPaise);
   const progress = Math.min(100, Math.floor(available / 10000 * 100));
 
   // Render a fresh PNG for every command so the username, avatar, rank and INR
