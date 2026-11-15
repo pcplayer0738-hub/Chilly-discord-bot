@@ -495,16 +495,51 @@ function auditEmbed(title, color, fields) {
 // Shared Chilly moderation embed style. Custom emoji IDs are from the user's server.
 const CHILLY_EMOJI = {
  dm: '<:Dm:1564590774027558993>',
- arrow: '<:Arrow:1564590038396833812>',
- moderator: '<:Admin:1564349896402669708>',
- member: '<:Members:1564349878472015984>',
- dot: '<:Bluedot:1564349885841408293>',
- gift: '<:Bluegift:1564349870385406062>',
- success: '<:Whitetick:1564349880766304456>',
+ arrow: '<:1000022230:1571576478452285621>',
+ moderator: '<:1000022221:1571576542683861244>',
+ member: '<:1000022240:1571576507070030027>',
+ dot: '<:1000022243:1571576512547782718>',
+ gift: '<:1000022218:1571576540460752937>',
+ success: '<:1000022223:1571576535972839504>',
  rejected: '<:Rejected:1564349876068688032>',
- admin: '<:Admin:1564349896402669708>',
- bot: '<:Bot:1564349898709540974>'
+ admin: '<:1000022221:1571576542683861244>',
+ bot: '<:1000022220:1571576531216629811>'
 };
+
+function chillyHelpPayload() {
+ const categories = [
+  {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
+  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
+  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
+  {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Security**'},
+  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
+  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
+  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
+  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
+  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'}
+ ];;
+ const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
+ const invite = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
+ const description = [
+  "**Hey, I'm Chilly™**",
+  'A powerful multipurpose Discord bot for your community.',
+  '',
+  `<:1000022237:1571576499876921487> **My Prefix is**  \`.\``,
+  `<:1000022243:1571576512547782718> **Total Commands:** \`${commands.length}\``,
+  '<:1000022241:1571576510081536081> **Choose a Specific Module of your Desire**',
+  '',
+  categories.map(x=>x.line).join('\n'),
+  '',
+  '<:1000022241:1571576510081536081> **Links**',
+  `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
+ ].join('\n');
+ const embed = new EmbedBuilder().setColor(0x363640)
+  .setTitle('<:1000022239:1571576504599712004> Hey, I\'m Chilly™')
+  .setDescription(description)
+  .setThumbnail(client.user.displayAvatarURL({size:256}))
+  .setFooter({text:'Chilly • Powered by Spidyyy',iconURL:client.user.displayAvatarURL()});
+ return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
+}
 function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
  const lines = [
   `${CHILLY_EMOJI.member} **${targetLabel}:** ${targetName}${targetId ? ` (\`${targetId}\`)` : ''}`,
@@ -727,15 +762,15 @@ client.on('interactionCreate', async i=>{
   }
   if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
    const pages = {
-    economy:{title:'Economy',body:'<:Bluegift:1564349870385406062> `/balance` `/bank` `/deposit` `/withdraw` `/daily` `/work` `/slots` `/pay` `/leaderboard` `/shop` `/buy` `/inventory` `/money`\n\n<:Bluedot:1564349885841408293> Prefix: `.bal` `.daily` `.work` `.pay @user 1000`'},
-    rewards:{title:'Real Money Rewards',body:'<:Whitetick:1564349880766304456> `.bal` `.prof` `.rank` `.rich` `.withdraw [amount]`\n\n<:Bluedot:1564349885841408293> Minimum cash-out: **₹100**. Requests are sent to the bot owner by DM for manual review.'},
-    moderation:{title:'Moderation',body:'<:Admin:1564349896402669708> `/warn` `/warnings` `/clear` `/timeout` `/untimeout` `/kick` `/ban` `/unban` `/jail` `/unjail`'},
-    security:{title:'Security',body:'<:Bot:1564349898709540974> `/security` `/whitelist` `/steal` `/autoreact`'},
-    giveaways:{title:'Giveaways',body:'<:Bluegift:1564349870385406062> `/gstart` `/gend` `/greroll`'},
-    fun:{title:'Fun',body:'<:Members:1564349878472015984> `/8ball` `/coinflip` `/dice` `/rps` `/joke` `/ship`'},
-    utility:{title:'Utility',body:'<:Arrow:1564590038396833812> `/ping` `/avatar` `/userinfo` `/serverinfo` `/servericon` `/poll` `/calculator` `/remind` `/say`'},
-    setup:{title:'Server Setup',body:'<:Admin:1564349896402669708> `/ticket-setup` `/welcome-setup` `/jail-setup` `/setlogs` `/auto-role` `/role-all` `/role-colour` `/reaction-role`'},
-    leveling:{title:'Leveling',body:'<:Members:1564349878472015984> `/level` `/level-leaderboard` `/levelup-setup` `/levelrole`'}
+    economy:{title:'Economy',body:'<:1000022218:1571576540460752937> `/balance` `/bank` `/deposit` `/withdraw` `/daily` `/work` `/slots` `/pay` `/leaderboard` `/shop` `/buy` `/inventory` `/money`\n\n<:1000022243:1571576512547782718> Prefix: `.bal` `.daily` `.work` `.pay @user 1000`'},
+    rewards:{title:'Real Money Rewards',body:'<:1000022223:1571576535972839504> `.bal` `.prof` `.rank` `.rich` `.withdraw [amount]`\n\n<:1000022243:1571576512547782718> Minimum cash-out: **₹100**. Requests are sent to the bot owner by DM for manual review.'},
+    moderation:{title:'Moderation',body:'<:1000022221:1571576542683861244> `/warn` `/warnings` `/clear` `/timeout` `/untimeout` `/kick` `/ban` `/unban` `/jail` `/unjail`'},
+    security:{title:'Security',body:'<:1000022220:1571576531216629811> `/security` `/whitelist` `/steal` `/autoreact`'},
+    giveaways:{title:'Giveaways',body:'<:1000022218:1571576540460752937> `/gstart` `/gend` `/greroll`'},
+    fun:{title:'Fun',body:'<:1000022240:1571576507070030027> `/8ball` `/coinflip` `/dice` `/rps` `/joke` `/ship`'},
+    utility:{title:'Utility',body:'<:1000022230:1571576478452285621> `/ping` `/avatar` `/userinfo` `/serverinfo` `/servericon` `/poll` `/calculator` `/remind` `/say`'},
+    setup:{title:'Server Setup',body:'<:1000022221:1571576542683861244> `/ticket-setup` `/welcome-setup` `/jail-setup` `/setlogs` `/auto-role` `/role-all` `/role-colour` `/reaction-role`'},
+    leveling:{title:'Leveling',body:'<:1000022240:1571576507070030027> `/level` `/level-leaderboard` `/levelup-setup` `/levelrole`'}
    };
    const page=pages[i.values[0]]||pages.economy;
    return i.update({embeds:[new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle(`${page.title} Commands`).setDescription(page.body).setFooter({text:'Chilly • Powered by Spidyyy'})]});
@@ -923,21 +958,7 @@ Logs: <#${log.id}>`,ephemeral:true});
    await member.roles.remove(role,'Released from jail'); return i.reply('🔓 '+user.tag+' has been released.');
   }
   if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
-  if(c==='help') {
-   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Choose a command category').addOptions(
-    {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1564349870385406062',name:'Bluegift'}},
-    {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1564349880766304456',name:'Whitetick'}},
-    {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1564349896402669708',name:'Admin'}},
-    {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1564349898709540974',name:'Bot'}},
-    {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1564349870385406062',name:'Bluegift'}},
-    {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1564349878472015984',name:'Members'}},
-    {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1564590038396833812',name:'Arrow'}},
-    {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1564349896402669708',name:'Admin'}},
-    {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1564349878472015984',name:'Members'}}
-   );
-   const embed=new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle('Welcome to Chilly').setDescription('A multipurpose Discord bot for your community.\n\n<:Bluegift:1564349870385406062> **Choose a category** below to explore available commands.\n<:Bluedot:1564349885841408293> **Prefix:** `.`\n<:Whitetick:1564349880766304456> **Examples:** `.help` • `.daily` • `.pay @user 1000`').setFooter({text:'Chilly • Powered by Spidyyy'});
-   return i.reply({embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]});
-  }
+  if(c==='help') return i.reply(chillyHelpPayload());
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
@@ -1007,7 +1028,7 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(now-a[col]<cd) { const next=now+(cd-(now-a[col])); return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setTitle(`${CHILLY_EMOJI.gift} ${c==='daily'?'Daily Reward':'Work Cooldown'}`).setDescription(`${CHILLY_EMOJI.dot} You can claim again <t:${next}:R>.`).setFooter({text:'Chilly Economy'})],ephemeral:true}); }
    db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(amount,now,u.id);
    const updated=account(g.id,u.id);
-   if(c==='daily') return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:Bluedot:1564349885841408293> **Reward:** ${money(amount)}\n<:Bluedot:1564349885841408293> **Wallet:** ${money(updated.coins)}\n<:Bluedot:1564349885841408293> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
+   if(c==='daily') return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:1000022243:1571576512547782718> **Reward:** ${money(amount)}\n<:1000022243:1571576512547782718> **Wallet:** ${money(updated.coins)}\n<:1000022243:1571576512547782718> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
    return i.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setTitle(`${CHILLY_EMOJI.success} Work Complete`).setDescription(`You earned **${money(amount)}**.\nWallet: **${money(updated.coins)}**`).setFooter({text:'Chilly Economy'})]});
   }
   if(c==='pay') {
@@ -1859,28 +1880,14 @@ To get started, invite Chilly to your server and use **/help** to explore the av
  const prefixMatch=prefixRaw.match(/^\.(help|daily|work|balance|bank|pay|slots|leaderboard|shop|deposit|buy)(?:\s+(.+))?$/i);
  if(prefixMatch) {
   const cmd=prefixMatch[1].toLowerCase(), args=prefixMatch[2]||'', uid=message.author.id;
-  if(cmd==='help') {
-   const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Choose a command category').addOptions(
-    {label:'Economy',description:'Coins, bank and payments',value:'economy',emoji:{id:'1564349870385406062',name:'Bluegift'}},
-    {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1564349880766304456',name:'Whitetick'}},
-    {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1564349896402669708',name:'Admin'}},
-    {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1564349898709540974',name:'Bot'}},
-    {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1564349870385406062',name:'Bluegift'}},
-    {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1564349878472015984',name:'Members'}},
-    {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1564590038396833812',name:'Arrow'}},
-    {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1564349896402669708',name:'Admin'}},
-    {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1564349878472015984',name:'Members'}}
-   );
-   const embed=new EmbedBuilder().setColor(0x7138A8).setAuthor({name:'CHILLY • COMMAND CENTER',iconURL:client.user.displayAvatarURL()}).setTitle('Welcome to Chilly').setDescription('A multipurpose Discord bot for your community.\n\n<:Bluegift:1564349870385406062> **Choose a category** below to explore available commands.\n<:Bluedot:1564349885841408293> **Prefix:** `.`\n<:Whitetick:1564349880766304456> **Examples:** `.help` • `.daily` • `.pay @user 1000`').setFooter({text:'Chilly • Powered by Spidyyy'});
-   return message.reply({embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]});
-  }
+  if(cmd==='help') return message.reply(chillyHelpPayload());
   if(cmd==='daily'||cmd==='work') {
    const a=account(message.guild.id,uid),now=Math.floor(Date.now()/1000),col=cmd==='daily'?'daily':'worked',cd=cmd==='daily'?86400:3600;
    if(now-a[col]<cd) return message.reply(`${CHILLY_EMOJI.dot} You can claim again <t:${now+(cd-(now-a[col]))}:R>.`);
    const earned=cmd==='daily'?500:Math.floor(Math.random()*201)+100;
    db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(earned,now,uid);
    const updated=account(message.guild.id,uid);
-   if(cmd==='daily') return message.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:Bluedot:1564349885841408293> **Reward:** ${money(earned)}\n<:Bluedot:1564349885841408293> **Wallet:** ${money(updated.coins)}\n<:Bluedot:1564349885841408293> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
+   if(cmd==='daily') return message.reply({embeds:[new EmbedBuilder().setColor(0x8E69C9).setAuthor({name:'CHILLY • DAILY REWARDS',iconURL:client.user.displayAvatarURL()}).setTitle(`${CHILLY_EMOJI.gift} Daily Claim Successful`).setDescription(`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:1000022243:1571576512547782718> **Reward:** ${money(earned)}\n<:1000022243:1571576512547782718> **Wallet:** ${money(updated.coins)}\n<:1000022243:1571576512547782718> **Next claim:** <t:${now+86400}:R>`).setFooter({text:'Come back tomorrow for another reward • Chilly'})]});
    return message.reply(`${CHILLY_EMOJI.success} Work complete! You earned **${money(earned)}**. Wallet: **${money(updated.coins)}**`);
   }
   if(cmd==='bal'||cmd==='balance'||cmd==='bank') { const a=account(message.guild.id,uid); return message.reply(`**${message.author.username}**\nWallet: **${money(a.coins)}**\nBank: **${money(a.bank)}**`); }
