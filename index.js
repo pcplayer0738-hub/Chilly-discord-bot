@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS global_inventory (
  PRIMARY KEY(user,item)
 );
 `);
+// Server-specific real-money rewards, stored in paise for accurate INR arithmetic.
+db.exec(`
+CREATE TABLE IF NOT EXISTS real_money_users (
+ guild TEXT NOT NULL, user TEXT NOT NULL,
+ messages INTEGER NOT NULL DEFAULT 0,
+ earned_paise INTEGER NOT NULL DEFAULT 0,
+ paid_paise INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(guild,user)
+);
+`);
 // Import existing server-specific balances/items once. Coins and item quantities are summed;
 // cooldown timestamps use MAX so switching servers cannot bypass a cooldown.
 if (!db.prepare("SELECT 1 FROM chilly_config WHERE guild='__global_economy__' AND key='migration_v1'").get()) {
@@ -1851,6 +1861,154 @@ To get started, invite Chilly to your server and use **/help** to explore the av
   return;
  }
  if(!message.guild) return;
+
+ // Real-money reward commands: .rich, .bal [@member], .prof [@member].
+ const rewardCommand = message.content.trim().match(/^\.(rich|bal|prof)(?:\s+(.+))?$/i);
+ if(rewardCommand) {
+  const command = rewardCommand[1].toLowerCase();
+  const target = message.mentions.users.first() ||
+   (rewardCommand[2] && /^\d{15,22}$/.test(rewardCommand[2].trim())
+    ? await client.users.fetch(rewardCommand[2].trim()).catch(() => null)
+    : null) || message.author;
+  const guildId = message.guild.id;
+  const ensureRewardAccount = userId => {
+   db.prepare('INSERT OR IGNORE INTO real_money_users(guild,user) VALUES(?,?)').run(guildId,userId);
+   return db.prepare('SELECT * FROM real_money_users WHERE guild=? AND user=?').get(guildId,userId);
+  };
+  const rupee = paise => '₹' + (paise / 100).toFixed(2);
+  const accountRow = ensureRewardAccount(target.id);
+  const available = Math.max(0, accountRow.earned_paise - accountRow.paid_paise);
+  const progress = Math.min(100, Math.floor(available / 10000 * 100));
+
+  // Render a fresh PNG for every command so the username, avatar, rank and INR
+  // figures are always taken from the member's current account.
+  const renderRewardCard = async (kind, data) => {
+   const { createCanvas, loadImage } = require('@napi-rs/canvas');
+   const canvas = createCanvas(kind === 'rich' ? 1500 : 1500, kind === 'rich' ? 1050 : 650);
+   const ctx = canvas.getContext('2d');
+   const W=canvas.width, H=canvas.height;
+   const rr=(x,y,w,h,r,fill,stroke=null,lw=2)=>{
+    ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fillStyle=fill; ctx.fill();
+    if(stroke){ctx.lineWidth=lw;ctx.strokeStyle=stroke;ctx.stroke();}
+   };
+   const txt=(value,x,y,size=28,color='#f4f2fa',weight='600',align='left')=>{
+    ctx.font=`${weight} ${size}px Arial`;ctx.fillStyle=color;ctx.textAlign=align;ctx.fillText(String(value),x,y);
+   };
+   const avatar=async (user,x,y,size)=>{
+    try{
+     const im=await loadImage(user.displayAvatarURL({extension:'png',size:256}));
+     ctx.save();ctx.beginPath();ctx.arc(x+size/2,y+size/2,size/2,0,Math.PI*2);ctx.clip();
+     ctx.drawImage(im,x,y,size,size);ctx.restore();
+     ctx.beginPath();ctx.arc(x+size/2,y+size/2,size/2,0,Math.PI*2);
+     ctx.lineWidth=7;ctx.strokeStyle='#9146e8';ctx.stroke();
+    }catch{rr(x,y,size,size, size/2, '#393143','#9146e8',5);txt('?',x+size/2,y+size*.68,42,'#fff','700','center');}
+   };
+   // Background and signature purple corner geometry.
+   ctx.fillStyle='#17181e';ctx.fillRect(0,0,W,H);
+   ctx.fillStyle='#6426a8';ctx.beginPath();ctx.moveTo(1040,0);ctx.lineTo(W,0);ctx.lineTo(W,300);ctx.lineTo(1220,300);ctx.closePath();ctx.fill();
+   ctx.fillStyle='#8138c8';ctx.beginPath();ctx.moveTo(1240,0);ctx.lineTo(W,0);ctx.lineTo(W,120);ctx.closePath();ctx.fill();
+   rr(6,6,W-12,H-12,34,'rgba(0,0,0,0)','#51405f',3);
+
+   if(kind==='rich'){
+    txt('WEALTH BOARD',62,65,25,'#c28be8','700');
+    txt('Top Ranked Members',62,132,52,'#f7f5fa','700');
+    txt(`Server economy  |  ${data.rows.length} ranked members`,64,174,23,'#aaa7b4','400');
+    rr(62,210,1376,86,24,'#30213e','#70429a',2);
+    txt('RANK',95,263,20,'#c8a3e6','700');
+    txt('MEMBER',230,263,20,'#c8a3e6','700');
+    txt('MESSAGES',1190,263,20,'#c8a3e6','700','right');
+    txt('INR',1405,263,20,'#c8a3e6','700','right');
+    for(let i=0;i<data.rows.length;i++){
+     const row=data.rows[i], y=318+i*91;
+     const fills=['#37301f','#2b2c34','#382a23'];
+     rr(62,y,1376,78,22,fills[i]||'#25252d',i===0?'#e6c64d':(i===1?'#b9b9c4':(i===2?'#c58a5a':'#393943')),i<3?3:1);
+     rr(84,y+13,76,52,15,'#494250');
+     txt(`#${i+1}`,122,y+48,24,i===0?'#f1d25b':i===1?'#dedee8':i===2?'#dba477':'#c69be6','700','center');
+     await avatar(row.user,178,y+7,64);
+     txt(row.name,270,y+34,25,'#f5f3f7','700');
+     txt('@'+row.username,270,y+59,17,'#aaa7b2','400');
+     txt(row.messages.toLocaleString('en-IN'),1190,y+48,24,'#d8c4ee','700','right');
+     txt(rupee(row.balance),1405,y+48,24,'#f2f0f6','700','right');
+    }
+    rr(62,955,1376,64,18,'#30213e','#8746c5',3);
+    txt(`YOUR POSITION  #${data.viewerRank}`,88,996,22,'#c89be8','700');
+    txt('300 MESSAGES = ₹0.50',1405,996,20,'#c89be8','700','right');
+   } else if(kind==='bal'){
+    txt('MEMBER BALANCE',62,65,25,'#c28be8','700');
+    await avatar(data.user,88,128,210);
+    txt(data.name,350,180,43,'#f7f5fa','700');
+    txt('@'+data.username,352,220,23,'#aaa7b4','400');
+    txt('LIFETIME CREDITED',850,150,20,'#aaa7c0','700');
+    txt(rupee(data.lifetime),850,205,38,'#f6f3fa','700');
+    rr(350,270,1080,230,28,'#242943','#414768',2);
+    txt('AVAILABLE BALANCE',390,330,23,'#aeb6d1','700');
+    txt(rupee(data.balance),390,425,72,'#75e0a6','700');
+    txt('WITHDRAWAL PROGRESS',900,330,23,'#aeb6d1','700');
+    txt(`${data.progress}% reached`,900,385,34,'#75e0a6','700');
+    rr(900,415,470,18,9,'#41465e');
+    rr(900,415,470*data.progress/100,18,9,'#df3e73');
+    txt('Minimum withdrawal: ₹100.00',900,465,18,'#aeb2c5','400');
+    txt(`${data.messages.toLocaleString('en-IN')} valid messages  •  ${data.remaining} to next ₹0.50`,350,565,22,'#c8c2d2','600');
+   } else {
+    txt('MEMBER WEALTH',62,65,25,'#c28be8','700');
+    await avatar(data.user,75,130,220);
+    txt(data.name,340,190,47,'#f7f5fa','700');
+    txt('@'+data.username,345,235,25,'#aaa7b4','400');
+    rr(345,270,240,58,14,'#7130ad');
+    txt(`RANK #${data.rank}`,465,308,24,'#fff','700','center');
+    rr(610,270,260,58,14,'#30303a');
+    txt(`${data.memberCount.toLocaleString('en-IN')} MEMBERS`,740,308,22,'#e4e0eb','700','center');
+    rr(75,410,1350,145,25,'#27262f','#3e3d49',2);
+    txt('TOTAL MESSAGES',115,455,20,'#aaa7b4','700');
+    txt(data.messages.toLocaleString('en-IN'),115,515,39,'#f6f3fa','700');
+    txt('INR BALANCE',575,455,20,'#aaa7b4','700');
+    txt(rupee(data.balance),575,515,39,'#f6f3fa','700');
+    txt('LIFETIME CREDITED',1030,455,20,'#aaa7b4','700');
+    txt(rupee(data.lifetime),1030,515,39,'#f6f3fa','700');
+    txt('MESSAGE MILESTONE',85,610,18,'#aaa7b4','700');
+    txt(`${data.messages.toLocaleString('en-IN')} / ${data.nextMilestone.toLocaleString('en-IN')} MSG`,1410,610,18,'#c7a2e6','700','right');
+    rr(85,625,1325,10,5,'#eeeaf2');
+    rr(85,625,1325*Math.min(1,data.messages/data.nextMilestone),5,'#9146d8');
+   }
+   return canvas.toBuffer('image/png');
+  };
+
+  try {
+   if(command === 'bal' || command === 'prof') {
+    const member = await message.guild.members.fetch(target.id).catch(()=>null);
+    const rank = db.prepare('SELECT COUNT(*) + 1 AS rank FROM real_money_users WHERE guild=? AND earned_paise>?')
+     .get(guildId,accountRow.earned_paise).rank;
+    const data = {
+     user:target, name:member?.displayName || target.username, username:target.username,
+     messages:accountRow.messages, balance:available, lifetime:accountRow.earned_paise,
+     progress, remaining:300-(accountRow.messages%300), rank,
+     memberCount:message.guild.memberCount,
+     nextMilestone:(Math.floor(accountRow.messages/300)+1)*300
+    };
+    const buffer=await renderRewardCard(command,data);
+    const attachment=new AttachmentBuilder(buffer,{name:`${command}-${target.id}.png`});
+    return message.reply({files:[attachment]}).catch(()=>{});
+   }
+
+   const rows=db.prepare('SELECT user,messages,earned_paise,paid_paise FROM real_money_users WHERE guild=? ORDER BY earned_paise DESC,messages DESC LIMIT 7').all(guildId);
+   const ranked=[];
+   for(const row of rows){
+    const user=await client.users.fetch(row.user).catch(()=>null);
+    if(!user) continue;
+    const member=await message.guild.members.fetch(row.user).catch(()=>null);
+    ranked.push({user,name:member?.displayName||user.username,username:user.username,messages:row.messages,balance:Math.max(0,row.earned_paise-row.paid_paise)});
+   }
+   const viewerRank=db.prepare('SELECT COUNT(*) + 1 AS rank FROM real_money_users WHERE guild=? AND earned_paise>?')
+    .get(guildId,accountRow.earned_paise).rank;
+   const buffer=await renderRewardCard('rich',{rows:ranked,viewerRank});
+   const attachment=new AttachmentBuilder(buffer,{name:'wealth-board.png'});
+   return message.reply({files:[attachment]}).catch(()=>{});
+  } catch(error) {
+   console.error('Real-money card render failed:',error);
+   return message.reply('❌ Could not generate the reward card. Make sure `@napi-rs/canvas` is installed in the bot dependencies.').catch(()=>{});
+  }
+ }
+
  // Short text aliases: Chilly daily/balance/work/slots, plus c daily/bal/work.
  const raw=message.content.trim();
  const match=raw.match(/^(?:chilly|c)\s+(daily|bal|balance|work|coin|coins|slots)(?:\s+(\d+))?$/i);
@@ -1874,6 +2032,22 @@ To get started, invite Chilly to your server and use **/help** to explore the av
    return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'🎉 Won **'+money(amount*mult)+'**!':'😢 Lost **'+money(amount)+'**.')+' Balance: **'+money(getAccount().coins)+'**');
   }
  }
+ // Count ordinary, non-command chat messages for INR rewards.
+ // Bots, webhooks, very short messages and bot commands do not earn rewards.
+ const rewardText = message.content.trim();
+ if(!message.author.bot && !message.webhookId && rewardText.length >= 3 &&
+    !/^(?:[.!/?]|chilly\s|c\s)/i.test(rewardText)) {
+  db.prepare('INSERT OR IGNORE INTO real_money_users(guild,user) VALUES(?,?)').run(message.guild.id,message.author.id);
+  const before = db.prepare('SELECT messages FROM real_money_users WHERE guild=? AND user=?').get(message.guild.id,message.author.id);
+  const newCount = before.messages + 1;
+  const reward = (Math.floor(newCount / 300) - Math.floor(before.messages / 300)) * 50;
+  db.prepare('UPDATE real_money_users SET messages=?, earned_paise=earned_paise+? WHERE guild=? AND user=?')
+   .run(newCount,reward,message.guild.id,message.author.id);
+  if(reward > 0) {
+   await message.channel.send(`💜 ${message.author}, you reached **${newCount.toLocaleString('en-IN')} messages** and earned **₹${(reward/100).toFixed(2)}**!`).catch(()=>{});
+  }
+ }
+
  const cfg=settings(message.guild.id);
  if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
   await message.delete().catch(()=>{});

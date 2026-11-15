@@ -2,6 +2,13 @@
   "name": "chilly-discord-bot",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": { "start": "node index.js" },
-  "dependencies": { "discord.js": "^14.19.3", "dotenv": "^16.6.1", "better-sqlite3": "^11.8.1" }
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.6.1",
+    "better-sqlite3": "^11.8.1",
+    "@napi-rs/canvas": "^0.1.80"
+  }
 }
