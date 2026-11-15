@@ -454,7 +454,7 @@ function chillyHelpPayload() {
   "**Hey, I'm Chilly™**",
   'A powerful multipurpose Discord bot for your community.',
   '',
-  `<:1000022237:1571576499876921487> **My Prefix is**  \`.\``,
+  `<:1000022237:1571576499876921487> **My Prefix is**  \`.\`  •  Every command also works with the dot prefix`,
   `<:1000022243:1571576512547782718> **Total Commands:** \`${commands.length}\``,
   '<:1000022241:1571576510081536081> **Choose a Specific Module of your Desire**',
   '',
@@ -604,172 +604,10 @@ async function stealFromSourceMessage(guild, sourceMessage) {
  return {ok:false,message:'❌ I could not find a custom emoji or sticker in that message. Unicode emojis cannot be added as server emojis.'};
 }
 
-client.on('interactionCreate', async i=>{
- try {
-  if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
-   const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
-   const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
-   if(!config) return i.reply({content:'This ticket button is no longer configured.',ephemeral:true});
-   const existing=i.guild.channels.cache.find(ch=>ch.type===ChannelType.GuildText && ch.topic?.startsWith(`chilly-ticket:${i.user.id}:${ticketKey}:`));
-   if(existing) return i.reply({content:`You already have this ticket: ${existing}`,ephemeral:true});
-   const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
-   const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Chilly • Tickets'})],components:[row]});
-   return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
-  }
-  if(i.isButton()&&i.customId==='chilly_ticket_claim') {
-   const topic=i.channel?.topic||'';
-   const match=topic.match(/^chilly-ticket:(\d+):([^:]+):(\d+):?(\d*)$/);
-   if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
-   const [,openerId,ticketKey,roleId,claimerId]=match;
-   const isStaff=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator)||!!i.member.roles.cache.has(roleId);
-   if(!isStaff) return i.reply({content:'Only this ticket type’s assigned staff members can claim it.',ephemeral:true});
-   if(claimerId) return i.reply({content:`This ticket has already been claimed by <@${claimerId}>.`,ephemeral:true});
-   await i.channel.permissionOverwrites.edit(i.user.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true});
-   await i.channel.permissionOverwrites.edit(roleId,{ViewChannel:true,ReadMessageHistory:true,SendMessages:false});
-   await i.channel.setTopic(`chilly-ticket:${openerId}:${ticketKey}:${roleId}:${i.user.id}`);
-   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claimed').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(true),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await i.update({components:[row]});
-   await i.channel.send(`✅ This ticket has been claimed by ${i.user}. Only this staff member can message and close the ticket.`);
-   return;
-  }
-  if(i.isButton()&&i.customId==='chilly_ticket_close') {
-   const match=(i.channel?.topic||'').match(/^chilly-ticket:(\d+):([^:]+):(\d+):(\d+)$/);
-   if(!match) return i.reply({content:'This is not a valid or claimed Chilly ticket.',ephemeral:true});
-   const [,openerId,ticketKey,roleId,claimerId]=match;
-   const isAdmin=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
-   if(i.user.id!==claimerId&&!isAdmin) return i.reply({content:'Only the staff member who claimed this ticket or a Server Administrator can close it.',ephemeral:true});
-   const config=db.prepare('SELECT log_channel FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
-   await i.reply({content:'🔒 Closing ticket…',ephemeral:true});
-   try {
-    const messages=await i.channel.messages.fetch({limit:100});
-    const transcript=[...messages.values()].reverse().map(m=>`[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${m.cleanContent}`).join('\n');
-    const log=i.guild.channels.cache.get(config?.log_channel);
-    if(log) await log.send({content:`🔒 Ticket **${ticketKey}** closed by ${i.user} (claimed by <@${claimerId}>; opened by <@${openerId}>).`,files:[new AttachmentBuilder(Buffer.from(transcript||'No messages.'),{name:`ticket-${ticketKey}-${openerId}.txt`})]});
-   } catch(err) { console.error('Ticket transcript/log error:',err); }
-   setTimeout(()=>i.channel.delete(`Ticket closed by ${i.user.tag}; opened by ${openerId}`).catch(()=>{}),1500);
-   return;
-  }
-  if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
-   const [,gameId,choice]=i.customId.split(':'); const game=rpsGames.get(gameId);
-   if(!game) return i.reply({content:'This RPS game is no longer active.',ephemeral:true});
-   if(![game.challenger,game.opponent].includes(i.user.id)) return i.reply({content:'You are not part of this RPS game.',ephemeral:true});
-   game.picks[i.user.id]=choice;
-   await i.reply({content:'Your choice is locked in: **'+choice+'**.',ephemeral:true});
-   if(game.picks[game.challenger]&&game.picks[game.opponent]) {
-    const a=game.picks[game.challenger], b=game.picks[game.opponent];
-    const win=(a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper');
-    if(a===b) {
-     db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.challenger);db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.opponent);})();
-    } else if(win) db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.challenger);
-    else db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.opponent);
-    const result=a===b?'It is a tie! Both bets were refunded.':'Winner: <@'+(win?game.challenger:game.opponent)+'> wins **'+money(game.bet*2)+'**!';
-    const channel=await client.channels.fetch(game.channel).catch(()=>null);
-    if(channel) await channel.send({content:'✊ **RPS Result**\n<@'+game.challenger+'> chose **'+a+'**\n<@'+game.opponent+'> chose **'+b+'**\n'+result}).catch(()=>{});
-    rpsGames.delete(gameId);
-   }
-   return;
-  }
-  if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
-   const id=i.customId.split(':')[1];
-   const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
-   if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
-   const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
-
-   return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
-  }
-  if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
-   const pages = {
-    economy:{title:'<:1000022218:1571576540460752937> Economy Commands',body:[
-     '`/balance` — Check a member’s Chilly Coin balance.',
-     '`/daily` — Claim your daily Chilly Coin reward.',
-     '`/work` — Earn Chilly Coins by working.',
-     '`/slots` — Bet Chilly Coins on the slot machine.',
-     '`/pay` — Send Chilly Coins to another member.',
-     '`/leaderboard` — View the richest members.',
-     '`/shop` — View items available in the Chilly Shop.',
-     '`/buy` — Purchase an item from the shop.',
-     '`/inventory` — View a member’s inventory.',
-     '`/money` — Add Chilly Coins to a member (server owner only).'
-    ].join('\n')},
-    rewards:{title:'<:1000022223:1571576535972839504> Real Money Rewards Commands',body:[
-     '`.bal @user` — View available INR reward balance.',
-     '`.prof @user` — View a member’s reward profile and rank.',
-     '`.rank @user` — View the member’s reward profile.',
-     '`.rich` — View the real-money wealth leaderboard.',
-     '`.withdraw [amount]` — Request an INR cash-out for manual review.'
-    ].join('\n')},
-    moderation:{title:'<:1000022221:1571576542683861244> Moderation Commands',body:[
-     `${CHILLY_EMOJI.moderator} **.staff @user** — Add a member to the Staff team.`,
-     `${CHILLY_EMOJI.rejected} **.remove staff @user** — Remove a member from the Staff team.`,
-     '`/warn` — Warn a server member.',
-     '`/warnings` — View a member’s warnings.',
-     '`/clear` — Delete recent messages.',
-     '`/timeout` — Temporarily timeout a member.',
-     '`/untimeout` — Remove a member’s timeout.',
-     '`/kick` — Kick a member from the server.',
-     '`/ban` — Ban a member from the server.',
-     '`/unban` — Unban a user by ID.',
-     '`/jail` — Jail a member using the configured jail role.',
-     '`/unjail` — Release a jailed member.'
-    ].join('\n')},
-    security:{title:'<:1000022220:1571576531216629811> Security Commands',body:[
-     '`/security` — Configure Chilly’s server security features.',
-     '`/whitelist` — Manage trusted users, roles and channels.',
-     '`/steal` — Add an emoji or sticker from a message.',
-     '`/autoreact` — Configure automatic reactions.'
-    ].join('\n')},
-    giveaways:{title:'<:1000022236:1571576497175789599> Giveaway Commands',body:[
-     '`/gstart` — Start a new reaction-based giveaway.',
-     '`/gend` — End an active giveaway early.',
-     '`/greroll` — Reroll a giveaway winner.'
-    ].join('\n')},
-    fun:{title:'<:1000022240:1571576507070030027> Fun Commands',body:[
-     '`/8ball` — Ask the magic 8-ball a question.',
-     '`/coinflip` — Flip a virtual coin.',
-     '`/dice` — Roll a six-sided dice.',
-     '`/rps` — Challenge a member to a Chilly Coin RPS duel.',
-     '`/joke` — Get a clean joke.',
-     '`/ship` — Check compatibility between two members.'
-    ].join('\n')},
-    utility:{title:'<:1000022230:1571576478452285621> Utility Commands',body:[
-     '`/ping` — Check Chilly’s response latency.',
-     '`/avatar` — Display a member’s avatar.',
-     '`/userinfo` — Show member account information.',
-     '`/serverinfo` — Show server information.',
-     '`/servericon` — Download a server icon from an invite.',
-     '`/poll` — Create a yes/no poll.',
-     '`/calculator` — Calculate a basic arithmetic expression.',
-     '`/remind` — Set a short in-bot reminder.',
-     '`/say` — Send a message through Chilly.'
-    ].join('\n')},
-    setup:{title:'<:1000022238:1571576502292713716> Server Setup Commands',body:[
-     '`/ticket-setup` — Configure ticket buttons and panels.',
-     '`/welcome-setup` — Configure server welcome messages.',
-     '`/jail-setup` — Configure the server jail role.',
-     '`/setlogs` — Set the server log channel.',
-     '`/auto-role` — Give new members a configured role.',
-     '`/role-all` — Manage a role across server members.',
-     '`/role-colour` — Configure a role’s colour.',
-     '`/reaction-role` — Create a reaction-based role.'
-    ].join('\n')},
-    leveling:{title:'<:1000022234:1571576486169809048> Leveling Commands',body:[
-     '`/level` — View a member’s level and XP.',
-     '`/level-leaderboard` — View the server XP leaderboard.',
-     '`/levelup-setup` — Configure level-up notifications.',
-     '`/levelrole` — Manage level-based role rewards.'
-    ].join('\n')}
-   };
-   const page=pages[i.values[0]];
-   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Chilly Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
-   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
-   const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
-   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Chilly • Command Center'});
-   return i.update({embeds:[embed],components:i.message.components});
-  }
-  if(!i.isChatInputCommand()) return;
+async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
+  const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
+  const isGuildOwner = g && u.id === g.ownerId;
   const target=i.options.getUser('user', false);
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',ephemeral:true});
@@ -829,8 +667,6 @@ Message: ${message}`:''}`,ephemeral:true});
    } catch(error) { console.error('/servericon failed:',error); return i.editReply('❌ Something went wrong while fetching that server icon.'); }
   }
   if(!g&&!['ping','help'].includes(c)) return i.reply({content:'Use this command in a server.',ephemeral:true});
-  const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
-  const isGuildOwner = g && u.id === g.ownerId;
   if(c==='steal') {
    if(!g) return i.reply({content:'Use /steal inside a server.',ephemeral:true});
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageEmojisAndStickers) && !isTrustedOwner && u.id!==g.ownerId) return i.reply({content:'⛔ You need Manage Expressions permission to use /steal.',ephemeral:true});
@@ -952,7 +788,20 @@ Logs: <#${log.id}>`,ephemeral:true});
    if(c==='jail') { await member.roles.add(role, i.options.getString('reason')||'Jailed by moderator'); return i.reply('🔒 '+user.tag+' has been jailed.'); }
    await member.roles.remove(role,'Released from jail'); return i.reply('🔓 '+user.tag+' has been released.');
   }
-  if(c==='ping') return i.reply('🏓 Pong! '+client.ws.ping+'ms');
+  if(c==='ping') {
+   const dbStarted=process.hrtime.bigint();
+   db.prepare('SELECT 1').get();
+   const dbLatency=Number(process.hrtime.bigint()-dbStarted)/1e6;
+   const apiLatency=Math.max(0,Date.now()-(i.createdTimestamp||Date.now()));
+   const wsLatency=Math.max(0,client.ws.ping);
+   const embed=chillyStyledEmbed({title:'Ping',description:'',thumbnail:true,timestamp:false,footer:'Powered by Spidyyy'})
+    .addFields(
+     {name:'API Latency',value:`\`${apiLatency.toFixed(0)}ms\``,inline:false},
+     {name:'Database Latency',value:`\`${dbLatency.toFixed(2)}ms\``,inline:false},
+     {name:'WebSocket Latency',value:`\`${wsLatency}ms\``,inline:false}
+    );
+   return i.reply({embeds:[embed]});
+  }
   if(c==='help') return i.reply(chillyHelpPayload());
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
@@ -1283,6 +1132,173 @@ Logs: <#${log.id}>`,ephemeral:true});
    const desc=r.winners.length?`${CHILLY_EMOJI.gift} **New Winner(s):** ${r.winners.map(x=>'<@'+x+'>').join(', ')}`:`${CHILLY_EMOJI.dot} No entries were available to reroll.`;
    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Rerolled`,description:desc,footer:'Chilly • Giveaways'})]});
   }
+}
+
+client.on('interactionCreate', async i=>{
+ try {
+  if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
+   const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
+   const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
+   if(!config) return i.reply({content:'This ticket button is no longer configured.',ephemeral:true});
+   const existing=i.guild.channels.cache.find(ch=>ch.type===ChannelType.GuildText && ch.topic?.startsWith(`chilly-ticket:${i.user.id}:${ticketKey}:`));
+   if(existing) return i.reply({content:`You already have this ticket: ${existing}`,ephemeral:true});
+   const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
+   const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Chilly • Tickets'})],components:[row]});
+   return i.reply({content:`Ticket created: ${ch}`,ephemeral:true});
+  }
+  if(i.isButton()&&i.customId==='chilly_ticket_claim') {
+   const topic=i.channel?.topic||'';
+   const match=topic.match(/^chilly-ticket:(\d+):([^:]+):(\d+):?(\d*)$/);
+   if(!match) return i.reply({content:'This is not a valid Chilly ticket.',ephemeral:true});
+   const [,openerId,ticketKey,roleId,claimerId]=match;
+   const isStaff=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator)||!!i.member.roles.cache.has(roleId);
+   if(!isStaff) return i.reply({content:'Only this ticket type’s assigned staff members can claim it.',ephemeral:true});
+   if(claimerId) return i.reply({content:`This ticket has already been claimed by <@${claimerId}>.`,ephemeral:true});
+   await i.channel.permissionOverwrites.edit(i.user.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true});
+   await i.channel.permissionOverwrites.edit(roleId,{ViewChannel:true,ReadMessageHistory:true,SendMessages:false});
+   await i.channel.setTopic(`chilly-ticket:${openerId}:${ticketKey}:${roleId}:${i.user.id}`);
+   const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claimed').setEmoji('✅').setStyle(ButtonStyle.Success).setDisabled(true),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
+   await i.update({components:[row]});
+   await i.channel.send(`✅ This ticket has been claimed by ${i.user}. Only this staff member can message and close the ticket.`);
+   return;
+  }
+  if(i.isButton()&&i.customId==='chilly_ticket_close') {
+   const match=(i.channel?.topic||'').match(/^chilly-ticket:(\d+):([^:]+):(\d+):(\d+)$/);
+   if(!match) return i.reply({content:'This is not a valid or claimed Chilly ticket.',ephemeral:true});
+   const [,openerId,ticketKey,roleId,claimerId]=match;
+   const isAdmin=!!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
+   if(i.user.id!==claimerId&&!isAdmin) return i.reply({content:'Only the staff member who claimed this ticket or a Server Administrator can close it.',ephemeral:true});
+   const config=db.prepare('SELECT log_channel FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
+   await i.reply({content:'🔒 Closing ticket…',ephemeral:true});
+   try {
+    const messages=await i.channel.messages.fetch({limit:100});
+    const transcript=[...messages.values()].reverse().map(m=>`[${new Date(m.createdTimestamp).toISOString()}] ${m.author.tag}: ${m.cleanContent}`).join('\n');
+    const log=i.guild.channels.cache.get(config?.log_channel);
+    if(log) await log.send({content:`🔒 Ticket **${ticketKey}** closed by ${i.user} (claimed by <@${claimerId}>; opened by <@${openerId}>).`,files:[new AttachmentBuilder(Buffer.from(transcript||'No messages.'),{name:`ticket-${ticketKey}-${openerId}.txt`})]});
+   } catch(err) { console.error('Ticket transcript/log error:',err); }
+   setTimeout(()=>i.channel.delete(`Ticket closed by ${i.user.tag}; opened by ${openerId}`).catch(()=>{}),1500);
+   return;
+  }
+  if(i.isButton()&&i.customId.startsWith('chilly_rps:')) {
+   const [,gameId,choice]=i.customId.split(':'); const game=rpsGames.get(gameId);
+   if(!game) return i.reply({content:'This RPS game is no longer active.',ephemeral:true});
+   if(![game.challenger,game.opponent].includes(i.user.id)) return i.reply({content:'You are not part of this RPS game.',ephemeral:true});
+   game.picks[i.user.id]=choice;
+   await i.reply({content:'Your choice is locked in: **'+choice+'**.',ephemeral:true});
+   if(game.picks[game.challenger]&&game.picks[game.opponent]) {
+    const a=game.picks[game.challenger], b=game.picks[game.opponent];
+    const win=(a==='rock'&&b==='scissors')||(a==='paper'&&b==='rock')||(a==='scissors'&&b==='paper');
+    if(a===b) {
+     db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.challenger);db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet,game.opponent);})();
+    } else if(win) db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.challenger);
+    else db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(game.bet*2,game.opponent);
+    const result=a===b?'It is a tie! Both bets were refunded.':'Winner: <@'+(win?game.challenger:game.opponent)+'> wins **'+money(game.bet*2)+'**!';
+    const channel=await client.channels.fetch(game.channel).catch(()=>null);
+    if(channel) await channel.send({content:'✊ **RPS Result**\n<@'+game.challenger+'> chose **'+a+'**\n<@'+game.opponent+'> chose **'+b+'**\n'+result}).catch(()=>{});
+    rpsGames.delete(gameId);
+   }
+   return;
+  }
+  if(i.isButton()&&i.customId.startsWith('chilly_enter:')) {
+   const id=i.customId.split(':')[1];
+   const g=db.prepare('SELECT * FROM giveaways WHERE id=?').get(id);
+   if(!g||g.ended||g.ends*1000<Date.now()) return i.reply({content:'Giveaway ended.',ephemeral:true});
+   const r=db.prepare('INSERT OR IGNORE INTO entries(giveaway,user) VALUES(?,?)').run(id,i.user.id);
+
+   return i.reply({content:r.changes?'You entered! Good luck!':'You already entered.',ephemeral:true});
+  }
+  if(i.isStringSelectMenu() && i.customId==='chilly_help_category') {
+   const pages = {
+    economy:{title:'<:1000022218:1571576540460752937> Economy Commands',body:[
+     '`/balance` — Check a member’s Chilly Coin balance.',
+     '`/daily` — Claim your daily Chilly Coin reward.',
+     '`/work` — Earn Chilly Coins by working.',
+     '`/slots` — Bet Chilly Coins on the slot machine.',
+     '`/pay` — Send Chilly Coins to another member.',
+     '`/leaderboard` — View the richest members.',
+     '`/shop` — View items available in the Chilly Shop.',
+     '`/buy` — Purchase an item from the shop.',
+     '`/inventory` — View a member’s inventory.',
+     '`/money` — Add Chilly Coins to a member (server owner only).'
+    ].join('\n')},
+    rewards:{title:'<:1000022223:1571576535972839504> Real Money Rewards Commands',body:[
+     '`.bal @user` — View available INR reward balance.',
+     '`.prof @user` — View a member’s reward profile and rank.',
+     '`.rank @user` — View the member’s reward profile.',
+     '`.rich` — View the real-money wealth leaderboard.',
+     '`.withdraw [amount]` — Request an INR cash-out for manual review.'
+    ].join('\n')},
+    moderation:{title:'<:1000022221:1571576542683861244> Moderation Commands',body:[
+     `${CHILLY_EMOJI.moderator} **.staff @user** — Add a member to the Staff team.`,
+     `${CHILLY_EMOJI.rejected} **.remove staff @user** — Remove a member from the Staff team.`,
+     '`/warn` — Warn a server member.',
+     '`/warnings` — View a member’s warnings.',
+     '`/clear` — Delete recent messages.',
+     '`/timeout` — Temporarily timeout a member.',
+     '`/untimeout` — Remove a member’s timeout.',
+     '`/kick` — Kick a member from the server.',
+     '`/ban` — Ban a member from the server.',
+     '`/unban` — Unban a user by ID.',
+     '`/jail` — Jail a member using the configured jail role.',
+     '`/unjail` — Release a jailed member.'
+    ].join('\n')},
+    security:{title:'<:1000022220:1571576531216629811> Security Commands',body:[
+     '`/security` — Configure Chilly’s server security features.',
+     '`/whitelist` — Manage trusted users, roles and channels.',
+     '`/steal` — Add an emoji or sticker from a message.',
+     '`/autoreact` — Configure automatic reactions.'
+    ].join('\n')},
+    giveaways:{title:'<:1000022236:1571576497175789599> Giveaway Commands',body:[
+     '`/gstart` — Start a new reaction-based giveaway.',
+     '`/gend` — End an active giveaway early.',
+     '`/greroll` — Reroll a giveaway winner.'
+    ].join('\n')},
+    fun:{title:'<:1000022240:1571576507070030027> Fun Commands',body:[
+     '`/8ball` — Ask the magic 8-ball a question.',
+     '`/coinflip` — Flip a virtual coin.',
+     '`/dice` — Roll a six-sided dice.',
+     '`/rps` — Challenge a member to a Chilly Coin RPS duel.',
+     '`/joke` — Get a clean joke.',
+     '`/ship` — Check compatibility between two members.'
+    ].join('\n')},
+    utility:{title:'<:1000022230:1571576478452285621> Utility Commands',body:[
+     '`/ping` — Check Chilly’s response latency.',
+     '`/avatar` — Display a member’s avatar.',
+     '`/userinfo` — Show member account information.',
+     '`/serverinfo` — Show server information.',
+     '`/servericon` — Download a server icon from an invite.',
+     '`/poll` — Create a yes/no poll.',
+     '`/calculator` — Calculate a basic arithmetic expression.',
+     '`/remind` — Set a short in-bot reminder.',
+     '`/say` — Send a message through Chilly.'
+    ].join('\n')},
+    setup:{title:'<:1000022238:1571576502292713716> Server Setup Commands',body:[
+     '`/ticket-setup` — Configure ticket buttons and panels.',
+     '`/welcome-setup` — Configure server welcome messages.',
+     '`/jail-setup` — Configure the server jail role.',
+     '`/setlogs` — Set the server log channel.',
+     '`/auto-role` — Give new members a configured role.',
+     '`/role-all` — Manage a role across server members.',
+     '`/role-colour` — Configure a role’s colour.',
+     '`/reaction-role` — Create a reaction-based role.'
+    ].join('\n')},
+    leveling:{title:'<:1000022234:1571576486169809048> Leveling Commands',body:[
+     '`/level` — View a member’s level and XP.',
+     '`/level-leaderboard` — View the server XP leaderboard.',
+     '`/levelup-setup` — Configure level-up notifications.',
+     '`/levelrole` — Manage level-based role rewards.'
+    ].join('\n')}
+   };
+   const page=pages[i.values[0]];
+   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Chilly Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
+   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
+   const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
+   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Chilly • Command Center'});
+   return i.update({embeds:[embed],components:i.message.components});
+  }
+  if(i.isChatInputCommand()) return await handleChatInputCommand(i);
  } catch(e) {
   console.error('Command error:',e);
   const p={content:'Command failed. Check bot permissions and hosting logs.',ephemeral:true};
@@ -1415,6 +1431,169 @@ async function sendStaffEmbed(channel, {title, description, target, actor, succe
  if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
  if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
  return channel.send({embeds:[embed]}).catch(() => null);
+}
+
+// Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
+// The parser reads the live slash-command schema, so new commands/options automatically
+// become available with the same dot prefix without duplicating command logic.
+const prefixCommandSchemas = commands.map(command => {
+ const data = typeof command.toJSON === 'function' ? command.toJSON() : command;
+ return data;
+});
+
+function tokenizePrefixInput(input) {
+ const tokens=[]; const re=/(?:"([^"]*)"|'([^']*)'|(\S+))/g; let m;
+ while((m=re.exec(input))) tokens.push(m[1] ?? m[2] ?? m[3]);
+ return tokens;
+}
+
+function prefixOptionSchema(commandData, tokens) {
+ const top=(commandData.options||[]);
+ let options=top, subcommand=null, group=null, index=0;
+ if(top.length && (top[0].type===1 || top[0].type===2)) {
+  const first=tokens[0]?.toLowerCase();
+  const groupNode=top.find(x=>x.type===2 && x.name===first);
+  if(groupNode) {
+   group=groupNode.name; index=1;
+   const subName=tokens[index]?.toLowerCase();
+   const subNode=(groupNode.options||[]).find(x=>x.type===1 && x.name===subName);
+   if(!subNode) return {error:`Unknown subcommand. Use \.${commandData.name} ${groupNode.options?.map(x=>x.name).join('|')||''}`.trim()};
+   subcommand=subNode.name; index++;
+   options=subNode.options||[];
+  } else {
+   const subNode=top.find(x=>x.type===1 && x.name===first);
+   if(!subNode) return {error:`Unknown subcommand for \.${commandData.name}.`};
+   subcommand=subNode.name; index=1; options=subNode.options||[];
+  }
+ }
+ return {options,subcommand,group,index};
+}
+
+async function resolvePrefixEntity(message, option, token) {
+ if(token==null) return null;
+ const value=String(token).trim();
+ if(option.type===6) {
+  const id=(value.match(/^<@!?(\d+)>$/)||value.match(/^(\d{15,22})$/))?.[1];
+  if(id) return message.mentions.users.get(id) || await client.users.fetch(id).catch(()=>null);
+  const member=message.guild?.members.cache.find(m=>m.user.username.toLowerCase()===value.toLowerCase() || m.displayName.toLowerCase()===value.toLowerCase());
+  return member?.user || null;
+ }
+ if(option.type===8) {
+  const id=(value.match(/^<@&(\d+)>$/)||value.match(/^(\d{15,22})$/))?.[1];
+  if(id) return message.guild?.roles.cache.get(id) || await message.guild?.roles.fetch(id).catch(()=>null);
+  return message.guild?.roles.cache.find(r=>r.name.toLowerCase()===value.toLowerCase()) || null;
+ }
+ if(option.type===7) {
+  const id=(value.match(/^<#(\d+)>$/)||value.match(/^(\d{15,22})$/))?.[1];
+  if(id) return message.guild?.channels.cache.get(id) || await message.guild?.channels.fetch(id).catch(()=>null);
+  return message.guild?.channels.cache.find(c=>c.name.toLowerCase()===value.toLowerCase()) || null;
+ }
+ return null;
+}
+
+async function parsePrefixCommand(message, raw) {
+ const parts=tokenizePrefixInput(raw);
+ if(!parts.length || !parts[0].startsWith('.')) return null;
+ const name=parts[0].slice(1).toLowerCase();
+ const commandData=prefixCommandSchemas.find(c=>c.name===name);
+ if(!commandData) return null;
+ const schema=prefixOptionSchema(commandData, parts.slice(1));
+ if(schema.error) return {error:schema.error, commandData};
+ const tokens=parts.slice(1+schema.index);
+ const values={}; let cursor=0;
+ const named={};
+ // Support both natural positional arguments and explicit --option value syntax.
+ const positional=[];
+ for(let n=0;n<tokens.length;n++) {
+  const t=tokens[n];
+  if(/^--[\w-]+(?:=|$)/.test(t)) {
+   const key=t.slice(2).split('=')[0];
+   let value=t.includes('=')?t.slice(t.indexOf('=')+1):tokens[++n];
+   named[key]=value;
+  } else positional.push(t);
+ }
+ const takeFor=(opt, index) => {
+  if(Object.prototype.hasOwnProperty.call(named,opt.name)) return named[opt.name];
+  if(index>=positional.length) return undefined;
+  // A final string option (reason/message/description/etc.) naturally consumes the rest.
+  const remaining=positional.length-index;
+  const remainingOpts=commandData.options||[];
+  return (opt.type===3 && opt===schema.options[schema.options.length-1] && remaining>1)
+    ? positional.slice(index).join(' ')
+    : positional[index];
+ };
+ for(let oi=0;oi<schema.options.length;oi++) {
+  const opt=schema.options[oi];
+  const rawValue=takeFor(opt,cursor);
+  if(rawValue===undefined) {
+   if(opt.required) return {error:`Missing required option **${opt.name}**.`,commandData};
+   continue;
+  }
+  if(!Object.prototype.hasOwnProperty.call(named,opt.name)) cursor += (opt.type===3 && opt===schema.options[schema.options.length-1] ? positional.length-cursor : 1);
+  let value=rawValue;
+  if(opt.type===6||opt.type===8||opt.type===7) value=await resolvePrefixEntity(message,opt,rawValue);
+  else if(opt.type===4) value=Number.parseInt(rawValue,10);
+  else if(opt.type===10) value=Number(rawValue);
+  else if(opt.type===5) value=/^(true|yes|on|1)$/i.test(String(rawValue));
+  else if(opt.type===3) value=String(rawValue);
+  if((opt.type===4||opt.type===10) && !Number.isFinite(value)) return {error:`Option **${opt.name}** must be a number.`,commandData};
+  if((opt.type===6||opt.type===8||opt.type===7) && !value) return {error:`I couldn't find a valid ${opt.type===6?'user':opt.type===8?'role':'channel'} for **${opt.name}**.`,commandData};
+  if(opt.choices?.length) {
+   const ok=opt.choices.some(choice=>String(choice.value).toLowerCase()===String(value).toLowerCase() || String(choice.name).toLowerCase()===String(value).toLowerCase());
+   if(!ok) return {error:`Invalid value for **${opt.name}**. Choices: ${opt.choices.map(x=>x.name).join(', ')}`,commandData};
+   const match=opt.choices.find(choice=>String(choice.value).toLowerCase()===String(value).toLowerCase() || String(choice.name).toLowerCase()===String(value).toLowerCase());
+   value=match.value;
+  }
+  values[opt.name]=value;
+ }
+ // Extra positional arguments are almost always an accidental typo.
+ if(cursor<positional.length && !(schema.options.length && schema.options[schema.options.length-1].type===3)) {
+  return {error:'Too many arguments. Use quotes around multi-word text, e.g. `.warn @user "Reason here"`.',commandData};
+ }
+ return {commandData,subcommand:schema.subcommand,group:schema.group,values};
+}
+
+function makePrefixInteraction(message, parsed) {
+ const values=parsed.values||{};
+ const options={
+  getSubcommand:()=>parsed.subcommand,
+  getSubcommandGroup:()=>parsed.group,
+  getUser:(name)=>values[name] ?? null,
+  getRole:(name)=>values[name] ?? null,
+  getChannel:(name)=>values[name] ?? null,
+  getString:(name)=>values[name] ?? null,
+  getInteger:(name)=>values[name] ?? null,
+  getNumber:(name)=>values[name] ?? null,
+  getBoolean:(name)=>values[name] ?? null,
+  getAttachment:(name)=>values[name] ?? null
+ };
+ let replyMessage=null;
+ const sendReply=async payload=>{
+  const body=typeof payload==='string'?{content:payload}:({...payload});
+  delete body.ephemeral;
+  return message.reply(body);
+ };
+ return {
+  commandName:parsed.commandData.name,
+  user:message.author,
+  member:message.member,
+  guild:message.guild,
+  channel:message.channel,
+  options,
+  memberPermissions:message.member?.permissions,
+  createdTimestamp:message.createdTimestamp,
+  replied:false,
+  deferred:false,
+  isChatInputCommand:()=>true,
+  reply:async payload=>{ replyMessage=await sendReply(payload); return replyMessage; },
+  followUp:async payload=>sendReply(payload),
+  deferReply:async payload=>{ replyMessage=await sendReply(typeof payload==='object'&&payload?.content?payload:{content:'Working…'}); return replyMessage; },
+  editReply:async payload=>{ if(!replyMessage) replyMessage=await sendReply(payload); else await replyMessage.edit(typeof payload==='string'?{content:payload}:payload); return replyMessage; },
+  deleteReply:async()=>{ if(replyMessage) await replyMessage.delete().catch(()=>{}); },
+  isButton:()=>false,
+  isStringSelectMenu:()=>false,
+  isChatInputCommand:()=>true
+ };
 }
 
 client.on('messageCreate', async message => {
@@ -1988,37 +2167,19 @@ To get started, invite Chilly to your server and use **/help** to explore the av
   return;
  }
  if(!message.guild) return;
-
- // Friendly prefix aliases for common commands.
  const prefixRaw=message.content.trim();
- const prefixMatch=prefixRaw.match(/^\.(help|daily|work|balance|pay|slots|leaderboard|shop|buy)(?:\s+(.+))?$/i);
- if(prefixMatch) {
-  const cmd=prefixMatch[1].toLowerCase(), args=prefixMatch[2]||'', uid=message.author.id;
-  if(cmd==='help') return message.reply(chillyHelpPayload());
-  if(cmd==='daily'||cmd==='work') {
-   const a=account(message.guild.id,uid),now=Math.floor(Date.now()/1000),col=cmd==='daily'?'daily':'worked',cd=cmd==='daily'?86400:3600;
-   if(now-a[col]<cd) return message.reply(`${CHILLY_EMOJI.dot} You can claim again <t:${now+(cd-(now-a[col]))}:R>.`);
-   const earned=cmd==='daily'?500:Math.floor(Math.random()*201)+100;
-   db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(earned,now,uid);
-   const updated=account(message.guild.id,uid);
-   if(cmd==='daily') return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Daily Claim Successful`,description:`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:1000022243:1571576512547782718> **Reward:** ${money(earned)}\n<:1000022243:1571576512547782718> **Wallet:** ${money(updated.coins)}\n<:1000022243:1571576512547782718> **Next claim:** <t:${now+86400}:R>`,footer:'Chilly • Daily Rewards'})]});
-   return message.reply(`${CHILLY_EMOJI.success} Work complete! You earned **${money(earned)}**. Wallet: **${money(updated.coins)}**`);
+
+ // Every registered slash command is also available with a dot prefix.
+ // Examples: `.ping`, `.ban @user`, `.gstart "Nitro" 1h 1`, `.help`.
+ if(prefixRaw.startsWith('.') && !/^\.(?:dm|staff|remove|withdraw|withdraw-paid|rich|bal|prof|rank)\b/i.test(prefixRaw)) {
+  const parsed=await parsePrefixCommand(message,prefixRaw);
+  if(parsed) {
+   if(parsed.error) return message.reply(`${CHILLY_EMOJI.rejected} ${parsed.error}`).catch(()=>{});
+   try { return await handleChatInputCommand(makePrefixInteraction(message,parsed)); }
+   catch(error) { console.error('Dot-prefix command failed:',error); return message.reply(`${CHILLY_EMOJI.rejected} Command failed. Check the bot permissions and command arguments.`).catch(()=>{}); }
   }
-  if(cmd==='bal'||cmd==='balance') { const a=account(message.guild.id,uid); return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.wallet} Chilly Wallet`,description:`${CHILLY_EMOJI.success} Here is your current Chilly Coin balance.`,footer:'Chilly • Economy'}).addFields({name:`${CHILLY_EMOJI.wallet} Wallet`,value:money(a.coins),inline:true})]}); }
-  if(cmd==='pay') {
-   const to=message.mentions.users.first(), amount=Number(args.match(/\b(\d+)\b/)?.[1]);
-   if(!to||!Number.isSafeInteger(amount)||amount<1) return message.reply('Usage: `.pay @user 1000`');
-   if(to.bot||to.id===uid) return message.reply('Choose another non-bot member.');
-   const a=account(message.guild.id,uid); account(message.guild.id,to.id);
-   if(a.coins<amount) return message.reply('Not enough Chilly Coins.');
-   db.transaction(()=>{db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(amount,uid);db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);})();
-   return message.reply(`${CHILLY_EMOJI.success} <@${uid}> sent **${money(amount)}** to <@${to.id}>.`);
-  }
-  if(cmd==='slots') { const amount=Number(args.match(/\b(\d+)\b/)?.[1]); if(!amount) return message.reply('Usage: `.slots 100`'); const a=account(message.guild.id,uid); if(a.coins<amount) return message.reply('Not enough Chilly Coins.'); const symbols=['🍒','🍋','🍇','⭐','🔔'],roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]); const mult=roll[0]===roll[1]&&roll[1]===roll[2]?(roll[0]==='⭐'?5:3):(roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0); const delta=mult?amount*mult:-amount; db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,uid); return message.reply('🎰 '+roll.join(' | ')+'\n'+(mult?'You won **'+money(amount*mult)+'**!':'You lost **'+money(amount)+'**.')+' Wallet: **'+money(account(message.guild.id,uid).coins)+'**'); }
-  if(cmd==='leaderboard') { const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all(); return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.crown} Coin Leaderboard`,description:rows.map((r,n)=>`**${n+1}.** <@${r.user}> — ${money(r.coins)}`).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'})]}); }
-  if(cmd==='shop') return message.reply('**Chilly Shop**\n🍪 Cookie — 100\n☕ Coffee — 250\n👑 Golden Crown — 1,000\nUse `/buy` to purchase.');
-  if(cmd==='buy') return message.reply(`Use the slash command \`/buy\` for this command's required options.`);
  }
+
 
  // Owner-only command to mark a manually paid real-money withdrawal request.
  if(prefixRaw.toLowerCase().startsWith('.withdraw-paid ')) {
