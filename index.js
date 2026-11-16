@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS real_money_users (
  PRIMARY KEY(guild,user)
 );
 `);
+// Daily message statistics for the `.m` command. Spam/invalid messages are only added when the reward counter accepts them.
+db.exec(`CREATE TABLE IF NOT EXISTS message_daily (guild TEXT NOT NULL, user TEXT NOT NULL, day TEXT NOT NULL, messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild,user,day))`);
 // Cash-out requests are sent to the configured bot owner for manual review.
 db.exec(`CREATE TABLE IF NOT EXISTS real_money_withdrawals (
  id INTEGER PRIMARY KEY AUTOINCREMENT, guild TEXT NOT NULL, user TEXT NOT NULL,
@@ -2220,6 +2222,29 @@ function makePrefixInteraction(message, parsed) {
  };
 }
 
+
+// Image card for the `.m` / `.m @user` message statistics command.
+async function renderMessageStatsCard({guild, user, totalMessages, todayMessages}) {
+ const { createCanvas, loadImage } = require('@napi-rs/canvas');
+ const canvas=createCanvas(1500,650), ctx=canvas.getContext('2d');
+ const bg=ctx.createLinearGradient(0,0,1500,650); bg.addColorStop(0,'#0b1020'); bg.addColorStop(.55,'#151b30'); bg.addColorStop(1,'#080d18');
+ ctx.fillStyle=bg; ctx.fillRect(0,0,1500,650);
+ ctx.fillStyle='#9146d8'; ctx.fillRect(0,0,1500,9);
+ ctx.globalAlpha=.12; ctx.fillStyle='#b86cff'; ctx.beginPath(); ctx.arc(1370,90,220,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+ const rr=(x,y,w,h,r,fill,stroke)=>{ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}};
+ const txt=(t,x,y,size,color,weight='600',align='left')=>{ctx.fillStyle=color;ctx.font=`${weight} ${size}px Sans`;ctx.textAlign=align;ctx.fillText(String(t),x,y);ctx.textAlign='left';};
+ try { const avatar=await loadImage(user.displayAvatarURL({extension:'png',size:256})); ctx.save();ctx.beginPath();ctx.arc(110,120,66,0,Math.PI*2);ctx.clip();ctx.drawImage(avatar,44,54,132,132);ctx.restore();ctx.strokeStyle='#b86cff';ctx.lineWidth=4;ctx.beginPath();ctx.arc(110,120,68,0,Math.PI*2);ctx.stroke(); } catch {}
+ txt('MESSAGE STATISTICS',215,92,34,'#f7f5ff','700');
+ txt('@'+String(user.username).slice(0,30),215,130,23,'#aeb4c8','500');
+ txt(guild.name,215,164,20,'#7f879d','500');
+ rr(55,230,665,260,24,'#171d31','#313b58'); rr(780,230,665,260,24,'#171d31','#313b58');
+ txt('TODAY MESSAGES',95,290,22,'#aeb4c8','700'); txt(Number(todayMessages).toLocaleString('en-IN'),95,375,62,'#b86cff','700'); txt('Valid messages today',95,420,20,'#7f879d','500');
+ txt('TOTAL MESSAGES',820,290,22,'#aeb4c8','700'); txt(Number(totalMessages).toLocaleString('en-IN'),820,375,62,'#75e0a6','700'); txt('Valid messages lifetime',820,420,20,'#7f879d','500');
+ txt('SPAM MESSAGES ARE NOT COUNTED',750,565,20,'#7f879d','600','center');
+ txt('NEXZU • MESSAGE TRACKER',750,610,18,'#9a83b8','600','center');
+ return canvas.toBuffer('image/png');
+}
+
 client.on('messageCreate', async message => {
  // Prefix command replies use the same branded embed style as slash commands.
  // Existing embed/image replies are preserved by nexzuCommandPayload().
@@ -2797,6 +2822,26 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  if(!message.guild) return;
  const prefixRaw=message.content.trim();
 
+ // `.m` shows valid message statistics as an image. `.m @user` checks another member.
+ if(/^\.m(?:\s+([\s\S]+))?$/i.test(prefixRaw)) {
+  const arg=prefixRaw.match(/^\.m(?:\s+([\s\S]+))?$/i)?.[1]?.trim()||'';
+  const mentioned=message.mentions.users.first();
+  const token=arg.replace(/<@!?(\d+)>/,'$1').trim();
+  const target=mentioned || (token && /^\d{15,22}$/.test(token) ? await client.users.fetch(token).catch(()=>null) : message.author);
+  if(!target) return message.reply(`${CHILLY_EMOJI.rejected} I couldn't find that member.`).catch(()=>{});
+  const day=new Date().toISOString().slice(0,10);
+  const total=Number(db.prepare('SELECT messages FROM real_money_users WHERE guild=? AND user=?').get(message.guild.id,target.id)?.messages||0);
+  const today=Number(db.prepare('SELECT messages FROM message_daily WHERE guild=? AND user=? AND day=?').get(message.guild.id,target.id,day)?.messages||0);
+  try {
+   const buffer=await renderMessageStatsCard({guild:message.guild,user:target,totalMessages:total,todayMessages:today});
+   return message.reply({files:[new AttachmentBuilder(buffer,{name:`message-stats-${target.id}.png`})]}).catch(()=>{});
+  } catch(error) {
+   console.error('.m card failed:',error);
+   return message.reply(`${CHILLY_EMOJI.rejected} Message stats card failed to render.`).catch(()=>{});
+  }
+ }
+
+
  // Every registered slash command is also available with a dot prefix.
  // Examples: `.ping`, `.ban @user`, `.gstart "Nitro" 1h 1`, `.help`.
  if(/^\.(?:antinuke|automod|antibot|mainrole)$/i.test(prefixRaw)) {
@@ -3142,6 +3187,8 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   const reward = (Math.floor(newCount / 300) - Math.floor(before.messages / 300)) * 50;
   db.prepare('UPDATE real_money_users SET messages=?, earned_paise=earned_paise+? WHERE guild=? AND user=?')
    .run(newCount,reward,message.guild.id,message.author.id);
+  const messageDay=new Date().toISOString().slice(0,10);
+  db.prepare('INSERT INTO message_daily(guild,user,day,messages) VALUES(?,?,?,1) ON CONFLICT(guild,user,day) DO UPDATE SET messages=messages+1').run(message.guild.id,message.author.id,messageDay);
   if(reward > 0) {
    await message.channel.send(`💜 ${message.author}, you reached **${newCount.toLocaleString('en-IN')} messages** and earned **₹${(reward/100).toFixed(2)}**!`).catch(()=>{});
   }
