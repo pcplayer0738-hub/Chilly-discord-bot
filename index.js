@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS guild_settings (
  guild TEXT PRIMARY KEY, log_channel TEXT, antinuke INTEGER DEFAULT 0, antiraid INTEGER DEFAULT 0, antilink INTEGER DEFAULT 0, antispam INTEGER DEFAULT 0, antiabuse INTEGER DEFAULT 0
 );
 `);
+// Dedicated AntiNuke / AutoMod configuration. These replace the old one-size-fits-all /security switch.
+db.exec(`
+CREATE TABLE IF NOT EXISTS antinuke_config (guild TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, config TEXT NOT NULL DEFAULT '{}', limits TEXT NOT NULL DEFAULT '{}', punishments TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS antinuke_mainroles (guild TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(guild,role));
+CREATE TABLE IF NOT EXISTS antibot_config (guild TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS antibot_whitelist (guild TEXT NOT NULL, user TEXT NOT NULL, PRIMARY KEY(guild,user));
+CREATE TABLE IF NOT EXISTS automod_config (guild TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, logging_channel TEXT, punishment TEXT NOT NULL DEFAULT 'timeout');
+CREATE TABLE IF NOT EXISTS automod_ignore (guild TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(guild,kind,target));
+`);
+// Preserve any existing AntiNuke enable state from the former /security command.
+db.prepare("INSERT OR IGNORE INTO antinuke_config(guild,enabled) SELECT guild,antinuke FROM guild_settings WHERE antinuke=1").run();
 // Global OWO-style economy: one wallet and inventory per Discord user across every server.
 db.exec(`
 CREATE TABLE IF NOT EXISTS global_users (
@@ -150,9 +161,6 @@ const commands = [
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   .addChannelOption(o=>o.setName('channel').setDescription('Welcome channel').addChannelTypes(ChannelType.GuildText).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Use {user} and {server} placeholders').setMaxLength(1000).setRequired(true)),
- new SlashCommandBuilder().setName('jail-setup').setDescription('Set the jail role for this server')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addRoleOption(o=>o.setName('role').setDescription('Jail role').setRequired(true)),
  new SlashCommandBuilder().setName('jail').setDescription('Jail a member')
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   .addUserOption(o=>o.setName('user').setDescription('Member to jail').setRequired(true))
@@ -215,6 +223,46 @@ const commands = [
  new SlashCommandBuilder().setName('clear').setDescription('Delete recent messages')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(true)),
+ new SlashCommandBuilder().setName('autorole').setDescription('Set or update the automatic role')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Role to give new members').setRequired(true)),
+ new SlashCommandBuilder().setName('clearwarns').setDescription('Clear all warnings for a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)),
+ new SlashCommandBuilder().setName('clone').setDescription('Clone the current text channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+ new SlashCommandBuilder().setName('enlarge').setDescription('Enlarge a custom emoji').addStringOption(o=>o.setName('emoji').setDescription('Custom emoji').setRequired(true)),
+ new SlashCommandBuilder().setName('hide').setDescription('Hide a text channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels).addChannelOption(o=>o.setName('channel').setDescription('Channel to hide').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+ new SlashCommandBuilder().setName('hideall').setDescription('Hide all text channels').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+ new SlashCommandBuilder().setName('lock').setDescription('Lock a text channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels).addChannelOption(o=>o.setName('channel').setDescription('Channel to lock').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+ new SlashCommandBuilder().setName('lockall').setDescription('Lock all text channels').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+ new SlashCommandBuilder().setName('moderation').setDescription('Open the moderation panel'),
+ new SlashCommandBuilder().setName('modguide').setDescription('Show the moderation command guide'),
+ new SlashCommandBuilder().setName('modlog').setDescription('Configure moderation logs').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('disable').setDescription('Disable moderation logs'))
+  .addSubcommand(sub=>sub.setName('set').setDescription('Set moderation log channel').addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true))),
+ new SlashCommandBuilder().setName('mute').setDescription('Timeout a member').setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addIntegerOption(o=>o.setName('duration').setDescription('Duration in minutes').setMinValue(1).setMaxValue(40320).setRequired(true)).addStringOption(o=>o.setName('reason').setDescription('Reason')),
+ new SlashCommandBuilder().setName('nick').setDescription('Change a member nickname').setDefaultMemberPermissions(PermissionFlagsBits.ManageNicknames)
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true)).addStringOption(o=>o.setName('nickname').setDescription('New nickname').setMaxLength(32).setRequired(true)),
+ new SlashCommandBuilder().setName('nuke').setDescription('Recreate the current text channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+ new SlashCommandBuilder().setName('purge').setDescription('Bulk delete messages').setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+  .addSubcommand(sub=>sub.setName('messages').setDescription('Delete recent messages').addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(true)).addUserOption(o=>o.setName('member').setDescription('Only this member')))
+  .addSubcommand(sub=>sub.setName('bot').setDescription('Delete bot messages').addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('contains').setDescription('Delete messages containing text').addStringOption(o=>o.setName('text').setDescription('Text to match').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('embeds').setDescription('Delete messages containing embeds').addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('emoji').setDescription('Delete messages containing custom emoji').addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('files').setDescription('Delete messages with attachments').addIntegerOption(o=>o.setName('amount').setDescription('1 to 100').setMinValue(1).setMaxValue(100).setRequired(false))),
+ new SlashCommandBuilder().setName('roleall').setDescription('Give a role to all members').setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles).addRoleOption(o=>o.setName('role').setDescription('Role to assign').setRequired(true)),
+ new SlashCommandBuilder().setName('role').setDescription('Bulk role assignment').setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addSubcommand(sub=>sub.setName('all').setDescription('Give role to all members').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('bots').setDescription('Give role to bots').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('humans').setDescription('Give role to human members').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true))),
+ new SlashCommandBuilder().setName('slowmode').setDescription('Set channel slowmode').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+  .addIntegerOption(o=>o.setName('duration').setDescription('Seconds, 0 to disable').setMinValue(0).setMaxValue(21600).setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Target text channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+ new SlashCommandBuilder().setName('snipe').setDescription('Show the latest deleted message'),
+ new SlashCommandBuilder().setName('unbanall').setDescription('Unban all currently banned users').setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+ new SlashCommandBuilder().setName('unhide').setDescription('Unhide a text channel').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels).addChannelOption(o=>o.setName('channel').setDescription('Channel to unhide').addChannelTypes(ChannelType.GuildText).setRequired(false)),
+ new SlashCommandBuilder().setName('unhideall').setDescription('Unhide all text channels').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
  new SlashCommandBuilder().setName('timeout').setDescription('Timeout a member')
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(true))
@@ -262,17 +310,25 @@ const commands = [
  new SlashCommandBuilder().setName('remind').setDescription('Set a reminder')
   .addIntegerOption(o=>o.setName('seconds').setDescription('10 to 86400 seconds').setMinValue(10).setMaxValue(86400).setRequired(true))
   .addStringOption(o=>o.setName('message').setDescription('Reminder').setRequired(true)),
+ new SlashCommandBuilder().setName('gconfig').setDescription('Show giveaway configuration')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+ new SlashCommandBuilder().setName('glist').setDescription('List active giveaways')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+ new SlashCommandBuilder().setName('gstaff').setDescription('Configure giveaway staff')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset the giveaway staff role'))
+  .addSubcommand(sub=>sub.setName('role').setDescription('Set the giveaway staff role').addRoleOption(o=>o.setName('role').setDescription('Staff role').setRequired(true))),
  new SlashCommandBuilder().setName('gstart').setDescription('Start a giveaway')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true))
   .addStringOption(o=>o.setName('duration').setDescription('Duration, e.g. 1m, 1h, 1d').setMaxLength(10).setRequired(true))
-  .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true)),
+  .addIntegerOption(o=>o.setName('winners').setDescription('Winner count').setMinValue(1).setMaxValue(20).setRequired(true))
+  .addStringOption(o=>o.setName('prize').setDescription('Prize').setRequired(true)),
  new SlashCommandBuilder().setName('gend').setDescription('End giveaway early')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID (optional; latest active if omitted)').setRequired(false)),
  new SlashCommandBuilder().setName('greroll').setDescription('Pick new winners')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID').setRequired(true)),
+  .addStringOption(o=>o.setName('id').setDescription('Giveaway ID (optional; latest active if omitted)').setRequired(false)),
  new SlashCommandBuilder().setName('steal').setDescription('Add an emoji or sticker from a replied message to this server')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageEmojisAndStickers)
   .addStringOption(o=>o.setName('message_id').setDescription('ID of the message containing the emoji or sticker').setRequired(true)),
@@ -289,14 +345,6 @@ const commands = [
    .addStringOption(o=>o.setName('trigger').setDescription('Trigger to remove').setMaxLength(100).setRequired(true)))
   .addSubcommand(sub=>sub.setName('list').setDescription('List automatic reactions'))
   .addSubcommand(sub=>sub.setName('reset').setDescription('Remove all automatic reactions')),
- new SlashCommandBuilder().setName('auto-role').setDescription('Set the role automatically given to new members')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addRoleOption(o=>o.setName('role').setDescription('Role to give new members').setRequired(true)),
- new SlashCommandBuilder().setName('role-all').setDescription('Give a role to all existing humans or bots')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
-  .addRoleOption(o=>o.setName('role').setDescription('Role to assign').setRequired(true))
-  .addStringOption(o=>o.setName('type').setDescription('Choose which members receive the role').setRequired(true)
-   .addChoices({name:'Bot only',value:'bot'},{name:'Human only',value:'human'})),
  new SlashCommandBuilder().setName('role-colour').setDescription('Change a role colour using a colour name or hex code')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
   .addRoleOption(o=>o.setName('role').setDescription('Role whose colour should change').setRequired(true))
@@ -319,12 +367,74 @@ const commands = [
  new SlashCommandBuilder().setName('level').setDescription('View your or another member’s level')
   .addUserOption(o=>o.setName('member').setDescription('Member to check').setRequired(false)),
  new SlashCommandBuilder().setName('level-leaderboard').setDescription('Show this server’s top levels'),
- new SlashCommandBuilder().setName('security').setDescription('Enable or disable Chilly security protections')
+ new SlashCommandBuilder().setName('antinuke').setDescription('Configure AntiNuke protection')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addStringOption(o=>o.setName('feature').setDescription('Protection feature').setRequired(true).addChoices(
-   {name:'Anti-nuke alerts',value:'antinuke'},{name:'Anti-raid alerts',value:'antiraid'},
-   {name:'Anti-link',value:'antilink'},{name:'Anti-spam',value:'antispam'},{name:'Anti-abuse',value:'antiabuse'}))
-  .addBooleanOption(o=>o.setName('enabled').setDescription('Enable or disable').setRequired(true))
+  .addSubcommand(sub=>sub.setName('config').setDescription('Configure AntiNuke settings').addStringOption(o=>o.setName('setting').setDescription('Setting name').setRequired(true)).addStringOption(o=>o.setName('value').setDescription('Setting value').setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Optional log channel').addChannelTypes(ChannelType.GuildText).setRequired(false)))
+  .addSubcommand(sub=>sub.setName('limit').setDescription('Set an AntiNuke event limit').addStringOption(o=>o.setName('event_or_amount').setDescription('Event or amount key').setRequired(true)).addIntegerOption(o=>o.setName('amount').setDescription('Limit amount').setMinValue(1).setMaxValue(1000).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('punishment').setDescription('Set an AntiNuke punishment').addStringOption(o=>o.setName('event_or_punishment').setDescription('Event or punishment key').setRequired(true)).addStringOption(o=>o.setName('punishment').setDescription('Punishment value').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset AntiNuke settings')),
+ new SlashCommandBuilder().setName('mainrole').setDescription('Manage AntiNuke main roles').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('add').setDescription('Register a main role').addRoleOption(o=>o.setName('role').setDescription('Main role').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('list').setDescription('List registered main roles'))
+  .addSubcommand(sub=>sub.setName('remove').setDescription('Remove a main role').addRoleOption(o=>o.setName('role').setDescription('Main role').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Remove all main roles')),
+ new SlashCommandBuilder().setName('antibot').setDescription('Configure AntiBot protection').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('add').setDescription('Add a bot to the whitelist').addUserOption(o=>o.setName('bot_user').setDescription('Bot user').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('config').setDescription('View or change AntiBot configuration').addBooleanOption(o=>o.setName('enabled').setDescription('Enable or disable').setRequired(false)))
+  .addSubcommand(sub=>sub.setName('remove').setDescription('Remove a bot from the whitelist').addUserOption(o=>o.setName('bot_user').setDescription('Bot user').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset AntiBot configuration'))
+  .addSubcommand(sub=>sub.setName('whitelist').setDescription('Manage AntiBot whitelist').addStringOption(o=>o.setName('action').setDescription('list, add or remove').setRequired(false)).addUserOption(o=>o.setName('bot_user').setDescription('Bot user for add/remove').setRequired(false))),
+ new SlashCommandBuilder().setName('automod').setDescription('Configure AutoMod protection').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand(sub=>sub.setName('config').setDescription('View AutoMod configuration'))
+  .addSubcommand(sub=>sub.setName('disable').setDescription('Disable AutoMod'))
+  .addSubcommand(sub=>sub.setName('enable').setDescription('Enable AutoMod'))
+  .addSubcommand(sub=>sub.setName('ignore').setDescription('Manage ignored AutoMod targets').addStringOption(o=>o.setName('action').setDescription('channel, role, reset or show').setRequired(false)).addChannelOption(o=>o.setName('channel').setDescription('Channel to ignore').addChannelTypes(ChannelType.GuildText).setRequired(false)).addRoleOption(o=>o.setName('role').setDescription('Role to ignore').setRequired(false)))
+  .addSubcommand(sub=>sub.setName('logging').setDescription('Set AutoMod logging channel').addChannelOption(o=>o.setName('channel').setDescription('Logging channel').addChannelTypes(ChannelType.GuildText).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('punishment').setDescription('Configure AutoMod punishment').addStringOption(o=>o.setName('punishment').setDescription('Punishment').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('unignore').setDescription('Remove ignored AutoMod targets').addStringOption(o=>o.setName('kind').setDescription('channel or role').setRequired(true).addChoices({name:'Channel',value:'channel'},{name:'Role',value:'role'})).addChannelOption(o=>o.setName('channel').setDescription('Ignored channel').addChannelTypes(ChannelType.GuildText).setRequired(false)).addRoleOption(o=>o.setName('role').setDescription('Ignored role').setRequired(false))),
+
+ new SlashCommandBuilder().setName('afk').setDescription('Set, update or remove your AFK status')
+  .addStringOption(o=>o.setName('reason').setDescription('AFK reason; omit to remove your AFK').setMaxLength(500).setRequired(false)),
+ new SlashCommandBuilder().setName('banner').setDescription("View a user's profile banner")
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+ new SlashCommandBuilder().setName('devices').setDescription("Show a member's Discord activity")
+  .addUserOption(o=>o.setName('user').setDescription('Member').setRequired(false)),
+ new SlashCommandBuilder().setName('inviteinfo').setDescription('View information about a Discord invite')
+  .addStringOption(o=>o.setName('invite').setDescription('Invite link or code').setRequired(true)),
+ new SlashCommandBuilder().setName('list').setDescription('List server members and resources')
+  .addSubcommand(sub=>sub.setName('admins').setDescription('List server administrators'))
+  .addSubcommand(sub=>sub.setName('boosters').setDescription('List server boosters'))
+  .addSubcommand(sub=>sub.setName('bots').setDescription('List bots in the server'))
+  .addSubcommand(sub=>sub.setName('early').setDescription('List Early Supporter badge holders'))
+  .addSubcommand(sub=>sub.setName('emojis').setDescription('List server emojis'))
+  .addSubcommand(sub=>sub.setName('inrole').setDescription('List members who have a role').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true))),
+ new SlashCommandBuilder().setName('fakeperms').setDescription('Preview fake permissions from a role')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true))
+  .addStringOption(o=>o.setName('permission').setDescription('Permission to preview').setRequired(false)),
+ new SlashCommandBuilder().setName('jailsetup').setDescription('Set up the jail system')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addRoleOption(o=>o.setName('role').setDescription('Jail role').setRequired(true)),
+ new SlashCommandBuilder().setName('jailsync').setDescription('Synchronize the jail system')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
+ new SlashCommandBuilder().setName('permit').setDescription('Add or remove a permitted jail staff role')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addStringOption(o=>o.setName('action').setDescription('Add or remove').setRequired(true).addChoices({name:'Add',value:'add'},{name:'Remove',value:'remove'}))
+  .addRoleOption(o=>o.setName('role').setDescription('Jail staff role').setRequired(true)),
+ new SlashCommandBuilder().setName('pjail').setDescription('Permanently jail a member')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+  .addUserOption(o=>o.setName('user').setDescription('Member to jail').setRequired(true))
+  .addStringOption(o=>o.setName('reason').setDescription('Reason').setRequired(false)),
+ new SlashCommandBuilder().setName('ticket').setDescription('Manage tickets and active ticket channels')
+  .addSubcommand(sub=>sub.setName('claim').setDescription('Claim the current ticket'))
+  .addSubcommand(sub=>sub.setName('close').setDescription('Close and lock the current ticket'))
+  .addSubcommand(sub=>sub.setName('config').setDescription('View configured ticket buttons'))
+  .addSubcommand(sub=>sub.setName('delete').setDescription('Delete the current ticket'))
+  .addSubcommand(sub=>sub.setName('edit').setDescription('Show ticket panel editor').addStringOption(o=>o.setName('panel_id').setDescription('Panel/button key').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('panel').setDescription('Open the ticket panel manager'))
+  .addSubcommand(sub=>sub.setName('rename').setDescription('Rename the current ticket channel').addStringOption(o=>o.setName('new_name').setDescription('New channel name').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('send').setDescription('Send a configured ticket panel').addStringOption(o=>o.setName('panel_id').setDescription('Optional button key').setRequired(false)))
+  .addSubcommand(sub=>sub.setName('setup').setDescription('Open ticket setup instructions')),
 ].map(c=>c.toJSON());
 
 function xpForNextLevel(level) { return (level * 100) + 75; }
@@ -459,6 +569,8 @@ async function endGiveaway(id, reroll=false) {
  }
  return {winners};
 }
+const deletedMessageCache = new Map();
+
 function settings(guildId) {
  db.prepare('INSERT OR IGNORE INTO guild_settings(guild) VALUES(?)').run(guildId);
  return db.prepare('SELECT * FROM guild_settings WHERE guild=?').get(guildId);
@@ -521,11 +633,15 @@ function chillyHelpPayload() {
   {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
   {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
   {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
-  {label:'Security',description:'Server protection tools',value:'security',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Security**'},
+  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **AntiNuke**'},
+  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **AutoMod**'},
   {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
   {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
   {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
   {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
+  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{name:'🔒'},line:'🔒 » **Jail**'},
+  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
+  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
   {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'}
  ];;
  const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
@@ -761,11 +877,28 @@ Message: ${message}`:''}`,ephemeral:true});
    warn: PermissionFlagsBits.ModerateMembers,
    warnings: PermissionFlagsBits.ModerateMembers,
    clear: PermissionFlagsBits.ManageMessages,
+   clearwarns: PermissionFlagsBits.ModerateMembers,
    timeout: PermissionFlagsBits.ModerateMembers,
    untimeout: PermissionFlagsBits.ModerateMembers,
+   mute: PermissionFlagsBits.ModerateMembers,
    kick: PermissionFlagsBits.KickMembers,
    ban: PermissionFlagsBits.BanMembers,
-   unban: PermissionFlagsBits.BanMembers
+   unban: PermissionFlagsBits.BanMembers,
+   unbanall: PermissionFlagsBits.BanMembers,
+   autorole: PermissionFlagsBits.ManageRoles,
+   clone: PermissionFlagsBits.ManageChannels,
+   hide: PermissionFlagsBits.ManageChannels,
+   hideall: PermissionFlagsBits.ManageChannels,
+   lock: PermissionFlagsBits.ManageChannels,
+   lockall: PermissionFlagsBits.ManageChannels,
+   nuke: PermissionFlagsBits.ManageChannels,
+   purge: PermissionFlagsBits.ManageMessages,
+   roleall: PermissionFlagsBits.ManageRoles,
+   role: PermissionFlagsBits.ManageRoles,
+   slowmode: PermissionFlagsBits.ManageChannels,
+   unhide: PermissionFlagsBits.ManageChannels,
+   unhideall: PermissionFlagsBits.ManageChannels,
+   nick: PermissionFlagsBits.ManageNicknames
   };
   if(moderationPermissions[c] && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator) && !i.memberPermissions?.has(moderationPermissions[c])) {
    return i.reply({content:`⛔ You need the appropriate Discord permission to use /${c}.`,ephemeral:true});
@@ -856,18 +989,80 @@ Logs: <#${log.id}>`,ephemeral:true});
    for(const [k,v] of Object.entries({welcome_channel:i.options.getChannel('channel').id,welcome_message:i.options.getString('message')})) db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,k,v);
    return i.reply({content:'✅ Welcome message configured for this server.',ephemeral:true});
   }
-  if(c==='jail-setup') {
-   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server required.',ephemeral:true});
-   const role=i.options.getRole('role'); db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'jail_role',role.id);
-   return i.reply({content:'✅ Jail role saved. Make sure the bot role is above it.',ephemeral:true});
-  }
   if(c==='jail'||c==='unjail') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ModerateMembers) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Moderate Members permission required.',ephemeral:true});
    const user=i.options.getUser('user'), member=await g.members.fetch(user.id).catch(()=>null), roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'jail_role')?.value;
-   if(!member||!roleId) return i.reply({content:'Set a jail role first with /jail-setup.',ephemeral:true});
-   const role=g.roles.cache.get(roleId); if(!role) return i.reply({content:'Saved jail role no longer exists. Run /jail-setup again.',ephemeral:true});
+   if(!member||!roleId) return i.reply({content:'Set a jail role first with /jailsetup.',ephemeral:true});
+   const role=g.roles.cache.get(roleId); if(!role) return i.reply({content:'Saved jail role no longer exists. Run /jailsetup again.',ephemeral:true});
    if(c==='jail') { await member.roles.add(role, i.options.getString('reason')||'Jailed by moderator'); return i.reply('🔒 '+user.tag+' has been jailed.'); }
    await member.roles.remove(role,'Released from jail'); return i.reply('🔓 '+user.tag+' has been released.');
+  }
+  if(c==='afk') {
+   const reason=i.options.getString('reason',false);
+   const row=db.prepare('SELECT * FROM afk_status WHERE guild=? AND user=?').get(g.id,u.id);
+   if(!reason && row) { db.prepare('DELETE FROM afk_status WHERE guild=? AND user=?').run(g.id,u.id); return i.reply(`${CHILLY_EMOJI.success} Your AFK status has been removed.`); }
+   if(!reason && !row) return i.reply({content:'Provide a reason to set AFK, or use the command again after setting AFK to remove it.',ephemeral:true});
+   db.prepare('INSERT INTO afk_status(guild,user,reason,created) VALUES(?,?,?,?) ON CONFLICT(guild,user) DO UPDATE SET reason=excluded.reason,created=excluded.created').run(g.id,u.id,reason,Date.now());
+   return i.reply(`${CHILLY_EMOJI.success} You are now AFK: **${reason}**`);
+  }
+  if(c==='banner') {
+   const member=i.options.getUser('user',false)||u; const full=await client.users.fetch(member.id,{force:true}).catch(()=>member); const url=full.bannerURL?.({size:4096})||null;
+   if(!url) return i.reply({content:`${CHILLY_EMOJI.rejected} ${full.username} does not have a profile banner.`,ephemeral:true});
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.member} ${full.username}'s Banner`,description:`[Open Banner](${url})`,thumbnail:false}).setImage(url)]});
+  }
+  if(c==='devices') {
+   const member=i.options.getUser('user',false)||u; const m=await g.members.fetch(member.id).catch(()=>null); const acts=m?.presence?.activities||[];
+   const desc=acts.length?acts.map(a=>`• **${a.name}**${a.state?` — ${a.state}`:''}`).join('\n'):'No active Discord activity detected.';
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} ${member.username}'s Activity`,description:desc})]});
+  }
+  if(c==='inviteinfo') {
+   const raw=i.options.getString('invite',true).trim(); const match=raw.match(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gg\/|discord(?:app)?\.com\/invite\/)?([A-Za-z0-9-]+)/i); const code=match?.[1];
+   if(!code) return i.reply({content:'Please provide a valid Discord invite link or code.',ephemeral:true});
+   const inv=await client.fetchInvite(code,{withCounts:true}).catch(()=>null); if(!inv) return i.reply({content:`${CHILLY_EMOJI.rejected} Invalid or unavailable invite.`,ephemeral:true});
+   const desc=[`**Server:** ${inv.guild?.name||'Unknown'}`,`**Invite:** ${inv.code}`,`**Members:** ${inv.memberCount??'Unknown'}`,`**Online:** ${inv.presenceCount??'Unknown'}`,`**Channel:** ${inv.channel?.name?`#${inv.channel.name}`:'Unknown'}`].join('\n');
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Invite Information`,description:desc})]});
+  }
+  if(c==='list') {
+   const sub=i.options.getSubcommand(false)||'members'; let members=[...g.members.cache.values()];
+   if(sub==='admins') members=members.filter(m=>m.permissions.has(PermissionFlagsBits.Administrator));
+   else if(sub==='boosters') members=members.filter(m=>!!m.premiumSince);
+   else if(sub==='bots') members=members.filter(m=>m.user.bot);
+   else if(sub==='early') members=members.filter(m=>m.user.flags?.has?.('EarlySupporter'));
+   else if(sub==='emojis') { const em=[...g.emojis.cache.values()]; return i.reply({embeds:[chillyStyledEmbed({title:'😀 Server Emojis',description:em.length?em.map(e=>String(e)+' '+e.name).join('\n').slice(0,4000):'No server emojis.'})]}); }
+   else if(sub==='inrole') { const role=i.options.getRole('role',true); members=members.filter(m=>m.roles.cache.has(role.id)); }
+   const shown=members.slice(0,50).map(m=>`• ${m} — ${m.user.tag}`).join('\n')||'No matching members.';
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} List ${sub}`,description:shown+(members.length>50?`\n\n…and ${members.length-50} more.`:'' )})]});
+  }
+  if(c==='fakeperms') {
+   const role=i.options.getRole('role',true), perm=i.options.getString('permission',false)||'ViewChannel';
+   return i.reply({embeds:[chillyStyledEmbed({title:'@ fakeperms',description:`Role: ${role}\nPermission preview: ${perm}\n\nThis command is a safe preview; Discord permissions are not actually modified.`})]});
+  }
+  if(c==='jailsetup') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner) return i.reply({content:'⛔ Manage Roles permission required.',ephemeral:true});
+   const role=i.options.getRole('role',true); db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'jail_role',role.id); return i.reply(`${CHILLY_EMOJI.success} Jail role set to ${role}.`);
+  }
+  if(c==='jailsync') {
+   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'jail_role')?.value; if(!roleId) return i.reply({content:'Set the jail role first with /jailsetup.',ephemeral:true});
+   const role=g.roles.cache.get(roleId); if(!role) return i.reply({content:'Saved jail role no longer exists. Run /jailsetup again.',ephemeral:true}); return i.reply(`${CHILLY_EMOJI.success} Jail system synchronized. Configured role: ${role}.`);
+  }
+  if(c==='permit') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !i.memberPermissions?.has(PermissionFlagsBits.ModerateMembers) && !isGuildOwner && !isTrustedOwner) return i.reply({content:'⛔ Manage Roles or Moderate Members permission required.',ephemeral:true});
+   const action=i.options.getString('action',true), role=i.options.getRole('role',true), key='jail_permit_role'; const current=(db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,key)?.value||'').split(',').filter(Boolean); const set=new Set(current); action==='add'?set.add(role.id):set.delete(role.id);
+   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,key,[...set].join(',')); return i.reply(`${CHILLY_EMOJI.success} ${action==='add'?'Added':'Removed'} ${role} ${action==='add'?'as':'from'} permitted jail staff.`);
+  }
+  if(c==='pjail') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ModerateMembers) && !isGuildOwner && !isTrustedOwner) return i.reply({content:'⛔ Moderate Members permission required.',ephemeral:true});
+   const user=i.options.getUser('user',true), target=await g.members.fetch(user.id).catch(()=>null), roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'jail_role')?.value;
+   if(!target||!roleId) return i.reply({content:'Set a jail role first with /jailsetup.',ephemeral:true}); const role=g.roles.cache.get(roleId); if(!role) return i.reply({content:'Saved jail role no longer exists. Run /jailsetup again.',ephemeral:true});
+   await target.roles.add(role,i.options.getString('reason',false)||'Permanently jailed'); return i.reply(`🔒 ${user.tag} has been permanently jailed.`);
+  }
+  if(c==='ticket') {
+   const sub=i.options.getSubcommand(); const topic=i.channel?.topic||''; const match=topic.match(/^chilly-ticket:(\d+):([^:]+):(\d+):?(\d*)$/);
+   if(sub==='claim') { if(!match) return i.reply({content:'This channel is not a Chilly ticket.',ephemeral:true}); const [,opener,key,role,claimer]=match; if(claimer) return i.reply({content:`Already claimed by <@${claimer}>.`,ephemeral:true}); if(!i.member.roles.cache.has(role)&&!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'Only assigned ticket staff can claim this ticket.',ephemeral:true}); await i.channel.setTopic(`chilly-ticket:${opener}:${key}:${role}:${u.id}`); return i.reply(`Ticket claimed by ${u}.`); }
+   if(sub==='close') { if(!match||!match[5]) return i.reply({content:'This is not a claimed Chilly ticket.',ephemeral:true}); if(match[5]!==u.id&&!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'Only the claiming staff member or an Administrator can close it.',ephemeral:true}); await i.channel.permissionOverwrites.edit(match[1],{SendMessages:false}).catch(()=>{}); return i.reply('🔒 Ticket closed and locked.'); }
+   if(sub==='delete') { if(!match&&!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'Only an Administrator can delete a non-ticket channel.',ephemeral:true}); await i.reply('🗑️ Deleting ticket…').catch(()=>{}); return i.channel.delete('Ticket deleted by command').catch(()=>{}); }
+   if(sub==='rename') { if(!match) return i.reply({content:'This channel is not a Chilly ticket.',ephemeral:true}); const name=i.options.getString('new_name',true).trim().toLowerCase().replace(/[^a-z0-9-]/g,'-').slice(0,90); if(!name) return i.reply({content:'Invalid channel name.',ephemeral:true}); await i.channel.setName(name); return i.reply(`${CHILLY_EMOJI.success} Ticket renamed to **${name}**.`); }
+   if(['config','panel','send','setup','edit'].includes(sub)) { const rows=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? ORDER BY ticket_key').all(g.id); const desc=rows.length?rows.map(x=>`• **${x.label}** — key \`${x.ticket_key}\` — Staff <@&${x.staff_role}> — Logs <#${x.log_channel}>`).join('\n'):'No ticket buttons configured.'; return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} Ticket Manager`,description:`${desc}\n\nUse **/ticket-setup** to create/edit panels and buttons.`})],ephemeral:true}); }
   }
   if(c==='ping') {
    const dbStarted=process.hrtime.bigint();
@@ -968,20 +1163,142 @@ Logs: <#${log.id}>`,ephemeral:true});
    db.prepare('UPDATE guild_settings SET log_channel=? WHERE guild=?').run(channel.id,g.id);
    return i.reply({content:'✅ Moderation and server logs will be sent to '+channel+'.',ephemeral:true});
   }
-  if(c==='security') {
-   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    return i.reply({content:'You need Manage Server permission to change security settings.',ephemeral:true});
-   }
-   const feature=i.options.getString('feature');
-   const enabled=i.options.getBoolean('enabled');
-   const allowedFeatures=['antinuke','antiraid','antilink','antispam','antiabuse'];
-   if(!allowedFeatures.includes(feature) || typeof enabled!=='boolean') {
-    return i.reply({content:'Invalid security feature or setting.',ephemeral:true});
-   }
-   settings(g.id);
-   db.prepare(`UPDATE guild_settings SET ${feature}=? WHERE guild=?`).run(enabled?1:0,g.id);
-   const names={antinuke:'Anti-nuke alerts',antiraid:'Anti-raid alerts',antilink:'Anti-link',antispam:'Anti-spam',antiabuse:'Anti-abuse'};
-   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.security} Chilly Security Settings`,description:`${enabled?CHILLY_EMOJI.success+' Enabled':CHILLY_EMOJI.rejected+' Disabled'} **${names[feature]}**.`,footer:'Chilly • Security'})],ephemeral:true});
+  if(c==='antinuke') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission to configure AntiNuke.',ephemeral:true});
+   db.prepare('INSERT OR IGNORE INTO antinuke_config(guild) VALUES(?)').run(g.id);
+   const row=db.prepare('SELECT * FROM antinuke_config WHERE guild=?').get(g.id), sub=i.options.getSubcommand();
+   const json=(v)=>{try{return JSON.parse(v||'{}')}catch{return {}}};
+   if(sub==='config') { const setting=i.options.getString('setting'), value=i.options.getString('value'), channel=i.options.getChannel('channel'); const cfg=json(row.config); cfg[setting]=channel?channel.id:value; const enabled=/^(on|enable|enabled|true)$/i.test(value); db.prepare('UPDATE antinuke_config SET enabled=?,config=? WHERE guild=?').run((setting.toLowerCase()==='enabled'||setting.toLowerCase()==='state')?(enabled?1:0):row.enabled,JSON.stringify(cfg),g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🛡️ AntiNuke',description:`**${setting}** → **${channel||value}**\nAntiNuke configuration updated.`,footer:'Chilly • AntiNuke'})]}); }
+   if(sub==='limit') { const event=i.options.getString('event_or_amount'), amount=i.options.getInteger('amount'); const limits=json(row.limits); limits[event]=amount; db.prepare('UPDATE antinuke_config SET limits=? WHERE guild=?').run(JSON.stringify(limits),g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🛡️ AntiNuke Limit',description:`**${event}** limit is now **${amount}**.`,footer:'Chilly • AntiNuke'})]}); }
+   if(sub==='punishment') { const event=i.options.getString('event_or_punishment'), punishment=i.options.getString('punishment'); const ps=json(row.punishments); ps[event]=punishment; db.prepare('UPDATE antinuke_config SET punishments=? WHERE guild=?').run(JSON.stringify(ps),g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🛡️ AntiNuke Punishment',description:`**${event}** → **${punishment}**`,footer:'Chilly • AntiNuke'})]}); }
+   db.prepare("UPDATE antinuke_config SET enabled=0,config='{}',limits='{}',punishments='{}' WHERE guild=?").run(g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🛡️ AntiNuke Reset',description:'AntiNuke settings have been reset to their defaults.',footer:'Chilly • AntiNuke'})]});
+  }
+  if(c==='mainrole') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission to manage AntiNuke main roles.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   if(sub==='add') { const role=i.options.getRole('role'); const r=db.prepare('INSERT OR IGNORE INTO antinuke_mainroles(guild,role) VALUES(?,?)').run(g.id,role.id); return i.reply({content:r.changes?`✅ Registered ${role} as an AntiNuke main role.`:'ℹ️ That role is already registered.',ephemeral:true}); }
+   if(sub==='remove') { const role=i.options.getRole('role'); const r=db.prepare('DELETE FROM antinuke_mainroles WHERE guild=? AND role=?').run(g.id,role.id); return i.reply({content:r.changes?`✅ Removed ${role} from AntiNuke main roles.`:'ℹ️ That role is not registered.',ephemeral:true}); }
+   if(sub==='reset') { db.prepare('DELETE FROM antinuke_mainroles WHERE guild=?').run(g.id); return i.reply({content:'✅ All AntiNuke main roles were removed.',ephemeral:true}); }
+   const rows=db.prepare('SELECT role FROM antinuke_mainroles WHERE guild=? ORDER BY role').all(g.id); return i.reply({content:`**AntiNuke Main Roles**\n${rows.length?rows.map((r,n)=>`${n+1}. <@&${r.role}>`).join('\n'):'No main roles registered.'}`,ephemeral:true});
+  }
+  if(c==='antibot') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission to configure AntiBot.',ephemeral:true});
+   db.prepare('INSERT OR IGNORE INTO antibot_config(guild) VALUES(?)').run(g.id); const sub=i.options.getSubcommand();
+   if(sub==='config') { const enabled=i.options.getBoolean('enabled'); if(enabled!==null) db.prepare('UPDATE antibot_config SET enabled=? WHERE guild=?').run(enabled?1:0,g.id); const row=db.prepare('SELECT enabled FROM antibot_config WHERE guild=?').get(g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🤖 AntiBot',description:`Status: **${row.enabled?'Enabled':'Disabled'}**`,footer:'Chilly • AntiBot'})]}); }
+   if(sub==='add'||sub==='remove') { const bot=i.options.getUser('bot_user'); const r=sub==='add'?db.prepare('INSERT OR IGNORE INTO antibot_whitelist(guild,user) VALUES(?,?)').run(g.id,bot.id):db.prepare('DELETE FROM antibot_whitelist WHERE guild=? AND user=?').run(g.id,bot.id); return i.reply({content:r.changes?(sub==='add'?`✅ Added ${bot} to AntiBot whitelist.`:`✅ Removed ${bot} from AntiBot whitelist.`):'ℹ️ No change was needed.',ephemeral:true}); }
+   if(sub==='reset') { db.prepare('UPDATE antibot_config SET enabled=1 WHERE guild=?').run(g.id); db.prepare('DELETE FROM antibot_whitelist WHERE guild=?').run(g.id); return i.reply({content:'✅ AntiBot configuration and whitelist reset.',ephemeral:true}); }
+   const action=(i.options.getString('action')||'list').toLowerCase(), bot=i.options.getUser('bot_user'); if(action==='add'&&bot) db.prepare('INSERT OR IGNORE INTO antibot_whitelist(guild,user) VALUES(?,?)').run(g.id,bot.id); else if(action==='remove'&&bot) db.prepare('DELETE FROM antibot_whitelist WHERE guild=? AND user=?').run(g.id,bot.id); const rows=db.prepare('SELECT user FROM antibot_whitelist WHERE guild=?').all(g.id); return i.reply({content:`**AntiBot Whitelist**\n${rows.length?rows.map((r,n)=>`${n+1}. <@${r.user}>`).join('\n'):'No whitelisted bots.'}`,ephemeral:true});
+  }
+  if(c==='automod') {
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) return i.reply({content:'You need Manage Server permission to configure AutoMod.',ephemeral:true});
+   db.prepare('INSERT OR IGNORE INTO automod_config(guild) VALUES(?)').run(g.id); const sub=i.options.getSubcommand();
+   if(sub==='enable'||sub==='disable') { db.prepare('UPDATE automod_config SET enabled=? WHERE guild=?').run(sub==='enable'?1:0,g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🤖 AutoMod',description:`AutoMod is now **${sub==='enable'?'Enabled':'Disabled'}**.`,footer:'Chilly • AutoMod'})]}); }
+   if(sub==='config') { const row=db.prepare('SELECT * FROM automod_config WHERE guild=?').get(g.id); return i.reply({embeds:[chillyStyledEmbed({title:'🤖 AutoMod Configuration',description:`Status: **${row.enabled?'Enabled':'Disabled'}**\nLogging: ${row.logging_channel?`<#${row.logging_channel}>`:'Not set'}\nPunishment: **${row.punishment}**`,footer:'Chilly • AutoMod'})]}); }
+   if(sub==='logging') { const ch=i.options.getChannel('channel'); db.prepare('UPDATE automod_config SET logging_channel=? WHERE guild=?').run(ch.id,g.id); return i.reply({content:`✅ AutoMod logging channel set to ${ch}.`,ephemeral:true}); }
+   if(sub==='punishment') { const punishment=i.options.getString('punishment'); db.prepare('UPDATE automod_config SET punishment=? WHERE guild=?').run(punishment,g.id); return i.reply({content:`✅ AutoMod punishment set to **${punishment}**.`,ephemeral:true}); }
+   if(sub==='ignore'||sub==='unignore') { const action=i.options.getString('action')||i.options.getString('kind')||'show', ch=i.options.getChannel('channel'), role=i.options.getRole('role'), kind=action.includes('role')?'role':'channel', target=kind==='role'?role?.id:ch?.id; if(action==='reset'){db.prepare('DELETE FROM automod_ignore WHERE guild=?').run(g.id);return i.reply({content:'✅ AutoMod ignored channels and roles reset.',ephemeral:true});} if(action==='show'){const rows=db.prepare('SELECT kind,target FROM automod_ignore WHERE guild=?').all(g.id);return i.reply({content:`**AutoMod Ignored Targets**\n${rows.length?rows.map((r,n)=>`${n+1}. ${r.kind==='role'?`<@&${r.target}>`:`<#${r.target}>`}`).join('\n'):'None'}`,ephemeral:true});} if(!target)return i.reply({content:'Select the channel/role to configure.',ephemeral:true}); if(sub==='ignore')db.prepare('INSERT OR IGNORE INTO automod_ignore(guild,kind,target) VALUES(?,?,?)').run(g.id,kind,target);else db.prepare('DELETE FROM automod_ignore WHERE guild=? AND kind=? AND target=?').run(g.id,kind,target); return i.reply({content:sub==='ignore'?`✅ Ignoring this ${kind} for AutoMod.`:`✅ AutoMod will no longer ignore this ${kind}.`,ephemeral:true}); }
+  }
+  if(c==='autorole' || c==='auto-role') {
+   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Manage Roles permission required.',ephemeral:true});
+   const role=i.options.getRole('role',true);
+   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
+   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'autorole',role.id);
+   return i.reply({content:`${CHILLY_EMOJI.success} New members will automatically receive ${role}.`,ephemeral:true});
+  }
+  if(c==='clearwarns') {
+   const to=i.options.getUser('user',true), result=db.prepare('DELETE FROM warnings WHERE guild=? AND user=?').run(g.id,to.id);
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Warnings Cleared`,description:`Cleared **${result.changes}** warning(s) for <@${to.id}>.`,footer:'Chilly • Moderation'})]});
+  }
+  if(c==='clone' || c==='nuke') {
+   if(!i.channel?.isTextBased() || !i.channel.clone) return i.reply({content:'This command can only be used in a text channel.',ephemeral:true});
+   await i.deferReply({ephemeral:true});
+   const oldChannel=i.channel, cloned=await oldChannel.clone({reason:c==='clone'?'Channel cloned by Chilly':'Channel nuked by Chilly'});
+   await cloned.setPosition(oldChannel.position).catch(()=>{});
+   if(c==='nuke') await oldChannel.delete('Channel nuked by Chilly').catch(()=>{});
+   return i.editReply(`${CHILLY_EMOJI.success} ${c==='nuke'?'Channel nuked and recreated':'Channel cloned'}: ${cloned}.`);
+  }
+  if(c==='enlarge') {
+   const raw=i.options.getString('emoji',true).trim(), match=raw.match(/^<a?:([A-Za-z0-9_~]+):(\d{15,22})>$/);
+   if(!match) return i.reply({content:'Please provide a valid custom emoji like `<:name:id>`.',ephemeral:true});
+   const animated=raw.startsWith('<a:'), url=`https://cdn.discordapp.com/emojis/${match[2]}.${animated?'gif':'png'}?size=4096`;
+   return i.reply({embeds:[chillyStyledEmbed({title:'🔍 Enlarged Emoji',description:`${match[1]}`,footer:'Chilly • Utility'}).setImage(url)]});
+  }
+  if(c==='hide' || c==='unhide') {
+   const channel=i.options.getChannel('channel')||i.channel;
+   if(!channel?.permissionOverwrites) return i.reply({content:'Please use this in or select a text channel.',ephemeral:true});
+   await channel.permissionOverwrites.edit(g.roles.everyone,{ViewChannel:c==='unhide'?true:false});
+   return i.reply({content:`${CHILLY_EMOJI.success} ${channel} is now **${c==='hide'?'hidden':'visible'}** for @everyone.`,ephemeral:true});
+  }
+  if(c==='hideall' || c==='unhideall') {
+   await i.deferReply({ephemeral:true}); let changed=0;
+   for(const ch of g.channels.cache.values()) if([ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(ch.type)) await ch.permissionOverwrites.edit(g.roles.everyone,{ViewChannel:c==='unhideall'?true:false}).then(()=>changed++).catch(()=>{});
+   return i.editReply(`${CHILLY_EMOJI.success} ${c==='hideall'?'Hidden':'Unhidden'} **${changed}** text channels for @everyone.`);
+  }
+  if(c==='lock') {
+   const channel=i.options.getChannel('channel')||i.channel;
+   if(!channel?.permissionOverwrites) return i.reply({content:'Please use this in or select a text channel.',ephemeral:true});
+   await channel.permissionOverwrites.edit(g.roles.everyone,{SendMessages:false});
+   return i.reply({content:`${CHILLY_EMOJI.success} ${channel} is now **locked** for @everyone.`,ephemeral:true});
+  }
+  if(c==='lockall') {
+   await i.deferReply({ephemeral:true}); let changed=0;
+   for(const ch of g.channels.cache.values()) if([ChannelType.GuildText,ChannelType.GuildAnnouncement].includes(ch.type)) await ch.permissionOverwrites.edit(g.roles.everyone,{SendMessages:false}).then(()=>changed++).catch(()=>{});
+   return i.editReply(`${CHILLY_EMOJI.success} Locked **${changed}** text channels for @everyone.`);
+  }
+  if(c==='moderation' || c==='modguide') {
+   const lines=['`.autorole [role]` — Set the automatic member role.','`.ban <member> [reason]` — Ban a member.','`.clearwarns <member>` — Clear all warnings.','`.clone` — Clone the current text channel.','`.enlarge <emoji>` — Enlarge a custom emoji.','`.hide [channel]` — Hide a channel from @everyone.','`.hideall` — Hide all text channels from @everyone.','`.kick <member> [reason]` — Kick a member.','`.lock [channel]` — Lock a channel.','`.lockall` — Lock all text channels.','`.modlog` — Configure moderation logging.','`.mute <member> [duration] [reason]` — Mute a member.','`.nick <member> <nickname>` — Change a nickname.','`.nuke` — Recreate the current text channel.','`.purge ...` — Bulk-delete filtered messages.','`.roleall <role>` — Give a role to all members.','`.role all|bots|humans <role>` — Bulk role assignment.','`.slowmode <duration> [channel]` — Set slowmode.','`.snipe` — Show the latest deleted message.','`.unbanall` — Unban all banned users.','`.unhide [channel]` — Unhide a channel.','`.unhideall` — Unhide all text channels.'];
+   return i.reply({embeds:[chillyStyledEmbed({title:'🛠️ Moderation',description:lines.join('\n'),footer:'Chilly • Moderation Guide'})]});
+  }
+  if(c==='modlog') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const sub=i.options.getSubcommand(); settings(g.id);
+   if(sub==='disable') { db.prepare('UPDATE guild_settings SET log_channel=NULL WHERE guild=?').run(g.id); return i.reply({content:'✅ Moderation logs disabled.',ephemeral:true}); }
+   const channel=i.options.getChannel('channel',true); db.prepare('UPDATE guild_settings SET log_channel=? WHERE guild=?').run(channel.id,g.id);
+   return i.reply({content:`${CHILLY_EMOJI.success} Moderation log channel set to ${channel}.`,ephemeral:true});
+  }
+  if(c==='mute') {
+   const to=i.options.getUser('user',true); if(to.id===TRUSTED_OWNER_ID||to.id===u.id) return i.reply({content:'⛔ You cannot mute that member.',ephemeral:true});
+   const member=await g.members.fetch(to.id).catch(()=>null); if(!member) return i.reply({content:'Member not found.',ephemeral:true});
+   const mins=i.options.getInteger('duration',true), reason=i.options.getString('reason')||'No reason provided'; await member.timeout(mins*60000,reason);
+   return i.reply({embeds:[moderationEmbed({title:'User has been muted!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]});
+  }
+  if(c==='nick') {
+   const to=i.options.getUser('user',true), nickname=i.options.getString('nickname',true), member=await g.members.fetch(to.id).catch(()=>null);
+   if(!member) return i.reply({content:'Member not found.',ephemeral:true});
+   if(member.id===g.members.me.id || member.roles.highest.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ I cannot change that member’s nickname.',ephemeral:true});
+   await member.setNickname(nickname,'Nickname changed by Chilly'); return i.reply({content:`${CHILLY_EMOJI.success} Nickname for ${to} changed to **${nickname}**.`});
+  }
+  if(c==='purge') {
+   const sub=i.options.getSubcommand(), amount=i.options.getInteger('amount')||50, fetched=await i.channel.messages.fetch({limit:100}); let filtered=[...fetched.values()];
+   if(sub==='bot') filtered=filtered.filter(m=>m.author?.bot);
+   if(sub==='contains') filtered=filtered.filter(m=>m.content?.toLowerCase().includes((i.options.getString('text',true)||'').toLowerCase()));
+   if(sub==='embeds') filtered=filtered.filter(m=>m.embeds?.length);
+   if(sub==='emoji') filtered=filtered.filter(m=>/<a?:\w+:\d+>/.test(m.content||''));
+   if(sub==='files') filtered=filtered.filter(m=>m.attachments?.size);
+   if(sub==='messages' && i.options.getUser('member')) filtered=filtered.filter(m=>m.author?.id===i.options.getUser('member').id);
+   const deleted=await i.channel.bulkDelete(filtered.slice(0,amount),true); return i.reply({content:`🧹 Deleted **${deleted.size}** message(s).`,ephemeral:true});
+  }
+  if(c==='roleall' || c==='role') {
+   const role=i.options.getRole('role',true), type=c==='roleall'?'all':i.options.getSubcommand();
+   if(role.id===g.id||role.managed||role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
+   if(!g.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({content:'I need Manage Roles permission.',ephemeral:true});
+   await i.deferReply({ephemeral:true}); const members=await g.members.fetch().catch(()=>null); if(!members) return i.editReply('❌ Could not fetch server members.');
+   const targets=members.filter(m=>m.id!==g.members.me.id&&(type==='all'||(type==='bots'&&m.user.bot)||(type==='humans'&&!m.user.bot))); let added=0,failed=0;
+   for(const member of targets.values()) { if(member.roles.cache.has(role.id)) continue; try{await member.roles.add(role,'Bulk role assignment by Chilly');added++;}catch{failed++;} }
+   return i.editReply(`✅ Added ${role} to **${added}** member(s).${failed?` Failed: **${failed}**.`:''}`);
+  }
+  if(c==='slowmode') {
+   const channel=i.options.getChannel('channel')||i.channel, duration=i.options.getInteger('duration',true); if(!channel.setRateLimitPerUser) return i.reply({content:'Please select a text channel.',ephemeral:true});
+   await channel.setRateLimitPerUser(duration,'Slowmode changed by Chilly'); return i.reply({content:`${CHILLY_EMOJI.success} Slowmode for ${channel} set to **${duration}s**.`,ephemeral:true});
+  }
+  if(c==='snipe') {
+   const data=deletedMessageCache.get(i.channelId); if(!data) return i.reply({content:'No deleted message is cached for this channel.',ephemeral:true});
+   return i.reply({embeds:[chillyStyledEmbed({title:'🕵️ Latest Deleted Message',description:`**Author:** ${data.author}\n**Content:** ${data.content.slice(0,3800)}`,footer:'Chilly • Snipe'})]});
+  }
+  if(c==='unbanall') {
+   await i.deferReply({ephemeral:true}); const bans=await g.bans.fetch().catch(()=>null); if(!bans) return i.editReply('❌ I could not fetch the server ban list.'); let count=0;
+   for(const ban of bans.values()) await g.members.unban(ban.user.id,'Unban all by Chilly').then(()=>count++).catch(()=>{}); return i.editReply(`${CHILLY_EMOJI.success} Unbanned **${count}** user(s).`);
   }
   if(c==='warn') {
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
@@ -1126,30 +1443,6 @@ Logs: <#${log.id}>`,ephemeral:true});
     return i.reply({content:`✅ Removed ${result.changes} auto-reaction(s).`,ephemeral:true});
    }
   }
-  if(c==='auto-role') {
-   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
-   const role=i.options.getRole('role',true);
-   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
-   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'autorole',role.id);
-   return i.reply({content:`✅ New members will automatically receive ${role}.`,ephemeral:true});
-  }
-  if(c==='role-all') {
-   if(!g) return i.reply({content:'Use this command inside a server.',ephemeral:true});
-   const role=i.options.getRole('role',true), type=i.options.getString('type',true);
-   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',ephemeral:true});
-   if(!g.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({content:'I need Manage Roles permission.',ephemeral:true});
-   await i.deferReply({ephemeral:true});
-   let members;
-   try { members=await g.members.fetch(); } catch { return i.editReply('❌ I could not fetch server members. Check the Server Members Intent and permissions.'); }
-   const targets=members.filter(m=>type==='bot'?m.user.bot:!m.user.bot && !m.user.system && !m.user.bot);
-   let added=0, failed=0;
-   for(const member of targets.values()) {
-    if(member.roles.cache.has(role.id) || member.id===g.members.me.id) continue;
-    try { await member.roles.add(role,'Bulk role assignment by Chilly'); added++; }
-    catch { failed++; }
-   }
-   return i.editReply(`✅ Finished. Added ${role} to **${added}** ${type==='bot'?'bot':'human'} member(s).${failed?` Failed: **${failed}**.`:''}`);
-  }
   if(c==='role-colour') {
    if(!g) return i.reply({content:'This command can only be used inside a server.',ephemeral:true});
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Manage Roles permission required.',ephemeral:true});
@@ -1196,7 +1489,28 @@ Logs: <#${log.id}>`,ephemeral:true});
     .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
+  if(c==='gconfig') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const staff=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'giveaway_staff_role')?.value;
+   const active=db.prepare('SELECT COUNT(*) AS n FROM giveaways WHERE guild=? AND ended=0').get(g.id).n;
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Configuration`,description:`**Staff Role:** ${staff?`<@&${staff}>`:'Not set'}
+**Active Giveaways:** **${active}**`,footer:'Chilly • Giveaways'})]});
+  }
+  if(c==='glist') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const rows=db.prepare('SELECT id,prize,winners,ends FROM giveaways WHERE guild=? AND ended=0 ORDER BY ends ASC').all(g.id);
+   const body=rows.length?rows.map((x,n)=>`**${n+1}.** \`${x.id}\` — **${x.prize}** • ${x.winners} winner(s) • <t:${x.ends}:R>`).join('\n'):'No active giveaways.';
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Active Giveaways`,description:body,footer:'Chilly • Giveaways'})]});
+  }
+  if(c==='gstaff') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const sub=i.options.getSubcommand();
+   if(sub==='reset') { db.prepare('DELETE FROM chilly_config WHERE guild=? AND key=?').run(g.id,'giveaway_staff_role'); return i.reply({content:'✅ Giveaway staff role reset.',ephemeral:true}); }
+   const role=i.options.getRole('role',true); db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(g.id,'giveaway_staff_role',role.id);
+   return i.reply({content:`${CHILLY_EMOJI.success} Giveaway staff role set to ${role}.`,ephemeral:true});
+  }
   if(c==='gstart') {
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
    const prize=i.options.getString('prize'), duration=i.options.getString('duration').trim().toLowerCase(), winners=i.options.getInteger('winners');
    const match=duration.match(/^([1-9]\d*)(m|h|d)$/);
    if(!match) return i.reply({content:'Invalid duration. Use formats like `1m`, `1h`, or `1d`.',ephemeral:true});
@@ -1218,12 +1532,18 @@ Logs: <#${log.id}>`,ephemeral:true});
    return;
   }
   if(c==='gend') {
-   const r=await endGiveaway(i.options.getString('id'));
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const requested=i.options.getString('id'); const id=requested||db.prepare('SELECT id FROM giveaways WHERE guild=? AND ended=0 ORDER BY ends DESC LIMIT 1').get(g.id)?.id;
+   if(!id) return i.reply({content:'No active giveaway found.',ephemeral:true});
+   const r=await endGiveaway(id);
    if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Giveaway Error`,description:r.error})],ephemeral:true});
    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Giveaway Ended`,description:'The giveaway has been ended successfully.',footer:'Chilly • Giveaways'})]});
   }
   if(c==='greroll') {
-   const r=await endGiveaway(i.options.getString('id'),true);
+   if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',ephemeral:true});
+   const requested=i.options.getString('id'); const id=requested||db.prepare('SELECT id FROM giveaways WHERE guild=? AND ended=0 ORDER BY ends DESC LIMIT 1').get(g.id)?.id;
+   if(!id) return i.reply({content:'No active giveaway found.',ephemeral:true});
+   const r=await endGiveaway(id,true);
    if(r.error) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Giveaway Error`,description:r.error})],ephemeral:true});
    const desc=r.winners.length?`${CHILLY_EMOJI.gift} **New Winner(s):** ${r.winners.map(x=>'<@'+x+'>').join(', ')}`:`${CHILLY_EMOJI.dot} No entries were available to reroll.`;
    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Rerolled`,description:desc,footer:'Chilly • Giveaways'})]});
@@ -1327,6 +1647,38 @@ client.on('interactionCreate', async i=>{
      '`.withdraw [amount]` — Request an INR cash-out for manual review.'
     ].join('\n')},
     moderation:{title:'<:1000022221:1571576542683861244> Moderation Commands',body:[
+     '`.autorole [role]` — Set the automatic member role.',
+     '`.ban <member> [reason=No reason provided]` — Ban a member.',
+     '`.clearwarns <member>` — Clear all warnings.',
+     '`.clone` — Clone the current text channel.',
+     '`.enlarge <emoji>` — Enlarge a custom emoji.',
+     '`.hide [channel]` — Hide a text channel from @everyone.',
+     '`.hideall` — Hide all text channels from @everyone.',
+     '`.kick <member> [reason=No reason provided]` — Kick a member.',
+     '`.lock [channel]` — Lock a text channel.',
+     '`.lockall` — Lock all text channels.',
+     '`.moderation` — Open the moderation panel.',
+     '`.modguide` — Show moderation command guide.',
+     '`.modlog disable` — Disable moderation logs.',
+     '`.modlog set <channel>` — Set moderation log channel.',
+     '`.mute <member> [duration] [reason=No reason provided]` — Mute a member.',
+     '`.nick <member> <nickname>` — Change a member nickname.',
+     '`.nuke` — Recreate the current text channel.',
+     '`.purge messages <amount> [member]` — Delete recent messages.',
+     '`.purge bot [amount=50]` — Delete bot messages.',
+     '`.purge contains <text> [amount=50]` — Delete matching messages.',
+     '`.purge embeds [amount=50]` — Delete messages with embeds.',
+     '`.purge emoji [amount=50]` — Delete messages containing custom emoji.',
+     '`.purge files [amount=50]` — Delete messages with attachments.',
+     '`.roleall <role>` — Give a role to all members.',
+     '`.role all <role>` — Give a role to all members.',
+     '`.role bots <role>` — Give a role to bots.',
+     '`.role humans <role>` — Give a role to humans.',
+     '`.slowmode <duration> [channel]` — Set channel slowmode.',
+     '`.snipe` — Show the latest deleted message.',
+     '`.unbanall` — Unban all banned users.',
+     '`.unhide [channel]` — Unhide a text channel.',
+     '`.unhideall` — Unhide all text channels.',
      `${CHILLY_EMOJI.moderator} **.staff @user** — Add a member to the Staff team.`,
      `${CHILLY_EMOJI.rejected} **.remove staff @user** — Remove a member from the Staff team.`,
      '`/warn` — Warn a server member.',
@@ -1340,13 +1692,49 @@ client.on('interactionCreate', async i=>{
      '`/jail` — Jail a member using the configured jail role.',
      '`/unjail` — Release a jailed member.'
     ].join('\n')},
-    security:{title:'<:1000022220:1571576531216629811> Security Commands',body:[
-     '`/security` — Configure Chilly’s server security features.',
-     '`/whitelist` — Manage trusted users, roles and channels.',
-     '`/steal` — Add an emoji or sticker from a message.',
-     '`/autoreact` — Configure automatic reactions.'
+    antinuke:{title:'🛡️ AntiNuke Commands',body:[
+     '`.antinuke` — Configure AntiNuke protection.',
+     '`.antinuke config [setting] [value] [channel]` — Configure AntiNuke settings.',
+     '`.antinuke limit [event_or_amount] [amount]` — Configure action limits.',
+     '`.antinuke punishment [event_or_punishment] [punishment]` — Set punishment.',
+     '`.antinuke reset` — Reset AntiNuke settings.',
+     '`.mainrole` — Manage AntiNuke main roles.',
+     '`.mainrole add <role>` — Register a main role.',
+     '`.mainrole list` — List registered main roles.',
+     '`.mainrole remove <role>` — Remove a main role.',
+     '`.mainrole reset` — Remove all main roles.',
+     '`.whitelist` — Manage action-specific whitelist permissions.'
+    ].join('\n')},
+    automod:{title:'🤖 AutoMod Commands',body:[
+     '`.antibot` — Show AntiBot commands.',
+     '`.antibot add <bot_user>` — Add a bot to whitelist.',
+     '`.antibot config [enabled]` — View or change AntiBot configuration.',
+     '`.antibot remove <bot_user>` — Remove a bot from whitelist.',
+     '`.antibot reset` — Reset AntiBot configuration.',
+     '`.antibot whitelist` — Manage AntiBot whitelist.',
+     '`.automod` — Show AutoMod commands.',
+     '`.automod config` — View AutoMod configuration.',
+     '`.automod disable` — Disable AutoMod.',
+     '`.automod enable` — Enable AutoMod.',
+     '`.automod ignore` — Manage ignored AutoMod targets.',
+     '`.automod ignore channel <channel>` — Ignore a channel.',
+     '`.automod ignore role <role>` — Ignore a role.',
+     '`.automod ignore reset` — Reset ignored channels and roles.',
+     '`.automod ignore show` — Show ignored channels and roles.',
+     '`.automod logging <channel>` — Set AutoMod logging channel.',
+     '`.automod punishment <punishment>` — Configure AutoMod punishment.',
+     '`.automod unignore channel <channel>` — Unignore a channel.',
+     '`.automod unignore role <role>` — Unignore a role.'
     ].join('\n')},
     giveaways:{title:'<:1000022236:1571576497175789599> Giveaway Commands',body:[
+     '`.gconfig` — Show giveaway configuration.',
+     '`.gend [message_id]` — End a giveaway.',
+     '`.glist` — List active giveaways.',
+     '`.greroll [message_id]` — Reroll a giveaway.',
+     '`.gstaff` — Configure giveaway staff.',
+     '`.gstaff reset` — Reset the giveaway staff role.',
+     '`.gstaff role <role>` — Set the giveaway staff role.',
+     '`.gstart <duration> <winners> <prize>` — Start a giveaway.',
      '`/gstart` — Start a new reaction-based giveaway.',
      '`/gend` — End an active giveaway early.',
      '`/greroll` — Reroll a giveaway winner.'
@@ -1373,12 +1761,44 @@ client.on('interactionCreate', async i=>{
     setup:{title:'<:1000022238:1571576502292713716> Server Setup Commands',body:[
      '`/ticket-setup` — Configure ticket buttons and panels.',
      '`/welcome-setup` — Configure server welcome messages.',
-     '`/jail-setup` — Configure the server jail role.',
      '`/setlogs` — Set the server log channel.',
-     '`/auto-role` — Give new members a configured role.',
-     '`/role-all` — Manage a role across server members.',
      '`/role-colour` — Configure a role’s colour.',
      '`/reaction-role` — Create a reaction-based role.'
+    ].join('\n')},
+    jail:{title:'🔒 Jail Commands',body:[
+     '`.jail <member> [reason=No reason provided]` — Jail a member.',
+     '`.jailsetup` — Set up the jail system.',
+     '`.jailsync` — Synchronize the jail system.',
+     '`.permit <action> <role>` — Add or remove a permitted jail staff role.',
+     '`.pjail <member> [reason=No reason provided]` — Permanently jail a member.',
+     '`.unjail <member>` — Remove a member from jail.'
+    ].join('\n')},
+    misc:{title:'🔧 Misc Commands',body:[
+     '`.afk [reason]` — Set, update or remove your AFK status.',
+     '`.avatar [user]` — View and download a user’s avatar.',
+     '`.banner [user]` — View and download a user’s banner.',
+     '`.devices [user]` — Show a member’s Discord activity.',
+     '`.inviteinfo <invite>` — View information about a Discord invite.',
+     '`.list` — List server members and resources.',
+     '`.list admins` — List server administrators.',
+     '`.list boosters` — List server boosters.',
+     '`.list bots` — List bots in the server.',
+     '`.list early` — List early supporter badge holders in the server.',
+     '`.list emojis` — List server emojis.',
+     '`.list inrole <role>` — List members who have a role.',
+     '`.fakeperms <role> <permission>` — Preview/manage fake permissions from a role.'
+    ].join('\n')},
+    tickets:{title:'🎟️ tickets',body:[
+     '`.ticket` — Manage ticket panels and active tickets.',
+     '`.ticket claim` — Claim the current ticket.',
+     '`.ticket close` — Close and lock the current ticket.',
+     '`.ticket config` — View the configuration of a ticket panel.',
+     '`.ticket delete` — Delete the current ticket.',
+     '`.ticket edit <panel_id>` — Edit an existing ticket panel.',
+     '`.ticket panel` — Open the ticket panel manager.',
+     '`.ticket rename <new_name>` — Rename the current ticket channel.',
+     '`.ticket send [panel_id]` — Send a configured ticket panel.',
+     '`.ticket setup` — Start the ticket panel setup wizard.'
     ].join('\n')},
     leveling:{title:'<:1000022234:1571576486169809048> Leveling Commands',body:[
      '`/level` — View a member’s level and XP.',
@@ -1389,7 +1809,7 @@ client.on('interactionCreate', async i=>{
    };
    const page=pages[i.values[0]];
    if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Chilly Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
-   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
+   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,antinuke:CHILLY_EMOJI.security,automod:CHILLY_EMOJI.fun,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
    const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Powered By Chilly Development™ | Designed By Spidyyy'});
    return i.update({embeds:[embed],components:i.message.components});
@@ -1405,6 +1825,7 @@ client.on('interactionCreate', async i=>{
 // Server event logging and configurable protective filters.
 client.on('messageDelete', async message => {
  if(!message.guild || message.author?.bot) return;
+ deletedMessageCache.set(message.channelId,{content:message.content||'[No cached text]',author:message.author?message.author.tag:'Unknown',authorId:message.author?.id||'Unknown',channelId:message.channelId,createdTimestamp:message.createdTimestamp||Date.now(),attachments:[...message.attachments.values()].map(a=>a.url)});
  const e=auditEmbed('🗑️ Message Deleted',0x95A5A6,[
   {name:'Author',value:message.author?`${message.author.tag} (${message.author.id})`:'Unknown'},
   {name:'Channel',value:`<#${message.channelId}>`},
@@ -1422,12 +1843,12 @@ client.on('channelDelete', async channel => {
  const cfg=settings(channel.guild.id);
  const e=auditEmbed('🗑️ Channel Deleted',0xE74C3C,[{name:'Channel',value:`${channel.name} (${channel.id})`}]);
  await logAction(channel.guild,e);
- if(cfg.antinuke) await logAction(channel.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A channel was deleted.'},{name:'Channel',value:channel.name},{name:'Action',value:'Alert only; no automatic punishment was applied.'}]));
+ if(db.prepare('SELECT enabled FROM antinuke_config WHERE guild=?').get(channel.guild.id)?.enabled) await logAction(channel.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A channel was deleted.'},{name:'Channel',value:channel.name},{name:'Action',value:'Alert only; no automatic punishment was applied.'}]));
 });
 client.on('roleDelete', async role => {
  const cfg=settings(role.guild.id);
  await logAction(role.guild,auditEmbed('🗑️ Role Deleted',0xE74C3C,[{name:'Role',value:`${role.name} (${role.id})`}]));
- if(cfg.antinuke) await logAction(role.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A role was deleted.'},{name:'Role',value:role.name},{name:'Action',value:'Alert only; check Audit Log and secure staff permissions.'}]));
+ if(db.prepare('SELECT enabled FROM antinuke_config WHERE guild=?').get(role.guild.id)?.enabled) await logAction(role.guild,auditEmbed('🛡️ Anti-nuke Alert',0xE74C3C,[{name:'Event',value:'A role was deleted.'},{name:'Role',value:role.name},{name:'Action',value:'Alert only; check Audit Log and secure staff permissions.'}]));
 });
 client.on('guildBanAdd', async ban => {
  const e=auditEmbed('🔨 Member Banned',0xE74C3C,[{name:'Member',value:`${ban.user.tag} (${ban.user.id})`},{name:'Reason',value:ban.reason||'Not provided'}]);
@@ -2276,6 +2697,118 @@ To get started, invite Chilly to your server and use **/help** to explore the av
 
  // Every registered slash command is also available with a dot prefix.
  // Examples: `.ping`, `.ban @user`, `.gstart "Nitro" 1h 1`, `.help`.
+ if(/^\.(?:antinuke|automod|antibot|mainrole)$/i.test(prefixRaw)) {
+  const alias=prefixRaw.slice(1).toLowerCase();
+  const usage={
+   antinuke:'Use `.antinuke config`, `.antinuke limit`, `.antinuke punishment`, or `.antinuke reset`.',
+   automod:'Use `.automod config`, `.automod enable`, `.automod disable`, `.automod ignore`, `.automod logging`, `.automod punishment`, or `.automod unignore`.',
+   antibot:'Use `.antibot config`, `.antibot add @bot`, `.antibot remove @bot`, `.antibot reset`, or `.antibot whitelist`.',
+   mainrole:'Use `.mainrole list`, `.mainrole add @role`, `.mainrole remove @role`, or `.mainrole reset`.'
+  };
+  return message.reply(usage[alias]).catch(()=>{});
+ }
+ // Extra screenshot-style prefix commands (Jail, Misc, Tickets).
+ const extra = prefixRaw.match(/^\.([a-z-]+)(?:\s+([\s\S]*))?$/i);
+ if(extra) {
+  const cmd=extra[1].toLowerCase(), args=(extra[2]||'').trim();
+  const mention=message.mentions.members.first();
+  const fetchMember=async token=>{
+   if(mention) return mention;
+   const id=(token||'').replace(/[<@!>]/g,'');
+   if(/^\d{15,22}$/.test(id)) return message.guild.members.fetch(id).catch(()=>null);
+   return null;
+  };
+  const isMod=message.member.permissions.has(PermissionFlagsBits.ManageRoles)||message.member.permissions.has(PermissionFlagsBits.ModerateMembers);
+
+  if(cmd==='afk') {
+   const row=db.prepare('SELECT * FROM afk_status WHERE guild=? AND user=?').get(message.guild.id,message.author.id);
+   if(!args && row) { db.prepare('DELETE FROM afk_status WHERE guild=? AND user=?').run(message.guild.id,message.author.id); return message.reply(`${CHILLY_EMOJI.success} Your AFK status has been removed.`).catch(()=>{}); }
+   if(!args && !row) return message.reply('Usage: `.afk [reason]`').catch(()=>{});
+   db.prepare('INSERT INTO afk_status(guild,user,reason,created) VALUES(?,?,?,?) ON CONFLICT(guild,user) DO UPDATE SET reason=excluded.reason,created=excluded.created').run(message.guild.id,message.author.id,args,Date.now());
+   return message.reply(`${CHILLY_EMOJI.success} You are now AFK: **${args}**`).catch(()=>{});
+  }
+  if(cmd==='avatar') {
+   const u=mention?.user || message.author;
+   return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.member} ${u.username}'s Avatar`,description:`[Open Avatar](${u.displayAvatarURL({size:4096})})`,thumbnail:false}).setImage(u.displayAvatarURL({size:4096}))]}).catch(()=>{});
+  }
+  if(cmd==='banner') {
+   const token=args.replace(/[<@!>]/g,'').split(/\s+/)[0];
+   const u=(mention?.user)||(/^\d{15,22}$/.test(token)?await client.users.fetch(token).catch(()=>null):null)||message.author;
+   const full=await client.users.fetch(u.id,{force:true}).catch(()=>u);
+   const url=full.bannerURL?.({size:4096})||null;
+   if(!url) return message.reply(`${CHILLY_EMOJI.rejected} ${full.username} does not have a profile banner.`).catch(()=>{});
+   return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.member} ${full.username}'s Banner`,description:`[Open Banner](${url})`,thumbnail:false}).setImage(url)]}).catch(()=>{});
+  }
+  if(cmd==='devices') {
+   const m=mention||message.member; const acts=m?.presence?.activities||[];
+   const text=acts.length?acts.map(a=>`• **${a.name}**${a.state?` — ${a.state}`:''}`).join('\n'):'No active Discord activity detected.';
+   return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} ${m.user.username}'s Activity`,description:text})]}).catch(()=>{});
+  }
+  if(cmd==='list') {
+   const sub=args.split(/\s+/)[0]?.toLowerCase()||'members'; let members=[...message.guild.members.cache.values()];
+   if(sub==='admins') members=members.filter(m=>m.permissions.has(PermissionFlagsBits.Administrator));
+   else if(sub==='boosters') members=members.filter(m=>!!m.premiumSince);
+   else if(sub==='bots') members=members.filter(m=>m.user.bot);
+   else if(sub==='early') members=members.filter(m=>m.user.flags?.has?.('EarlySupporter'));
+   else if(sub==='emojis') { const em=[...message.guild.emojis.cache.values()]; return message.reply({embeds:[chillyStyledEmbed({title:'😀 Server Emojis',description:em.length?em.map(e=>String(e)+' '+e.name).join('\n').slice(0,4000):'No server emojis.'})]}).catch(()=>{}); }
+   else if(sub==='inrole') { const role=message.mentions.roles.first(); if(!role) return message.reply('Usage: `.list inrole @role`').catch(()=>{}); members=members.filter(m=>m.roles.cache.has(role.id)); }
+   const shown=members.slice(0,50).map(m=>`• ${m} — ${m.user.tag}`).join('\n')||'No matching members.';
+   return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} List ${sub}`,description:shown+(members.length>50?`\n\n…and ${members.length-50} more.`:'' )})]}).catch(()=>{});
+  }
+  if(cmd==='inviteinfo') {
+   const code=(args.match(/(?:discord\.gg\/|discord(?:app)?\.com\/invite\/)?([A-Za-z0-9-]+)/)||[])[1];
+   if(!code) return message.reply('Usage: `.inviteinfo <invite>`').catch(()=>{});
+   const inv=await client.fetchInvite(code,{withCounts:true}).catch(()=>null);
+   if(!inv) return message.reply(`${CHILLY_EMOJI.rejected} Invalid or unavailable invite.`).catch(()=>{});
+   const desc=[`**Server:** ${inv.guild?.name||'Unknown'}`,`**Invite:** ${inv.code}`,`**Members:** ${inv.memberCount??'Unknown'}`,`**Online:** ${inv.presenceCount??'Unknown'}`,`**Channel:** ${inv.channel?.name?`#${inv.channel.name}`:'Unknown'}`].join('\n');
+   return message.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Invite Information`,description:desc})]}).catch(()=>{});
+  }
+  if(cmd==='fakeperms') {
+   if(!isMod) return message.reply('⛔ You need Manage Roles or Moderate Members to use this command.').catch(()=>{});
+   const role=message.mentions.roles.first(); const perm=args.replace(/<@&\d+>/,'').trim()||'ViewChannel';
+   if(!role) return message.reply('Usage: `.fakeperms @role <permission>`').catch(()=>{});
+   return message.reply({embeds:[chillyStyledEmbed({title:'@ fakeperms',description:`Role: ${role}\nPermission preview: ${perm}\n\nThis command is a safe preview; Discord permissions are not actually modified.`})]}).catch(()=>{});
+  }
+  if(cmd==='jailsetup') {
+   if(!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) return message.reply('⛔ Manage Roles permission required.').catch(()=>{});
+   const role=message.mentions.roles.first(); if(!role) return message.reply('Usage: `.jailsetup @JailRole`').catch(()=>{});
+   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(message.guild.id,'jail_role',role.id);
+   return message.reply(`${CHILLY_EMOJI.success} Jail role set to ${role}.`).catch(()=>{});
+  }
+  if(cmd==='jailsync') {
+   const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(message.guild.id,'jail_role')?.value;
+   if(!roleId) return message.reply('Set the jail role first with `.jailsetup @role`.').catch(()=>{});
+   const role=message.guild.roles.cache.get(roleId); if(!role) return message.reply('Saved jail role no longer exists.').catch(()=>{});
+   return message.reply(`${CHILLY_EMOJI.success} Jail system synchronized. Configured role: ${role}.`).catch(()=>{});
+  }
+  if(cmd==='permit') {
+   if(!isMod) return message.reply('⛔ Manage Roles or Moderate Members permission required.').catch(()=>{});
+   const role=message.mentions.roles.first(); const action=args.split(/\s+/)[0]?.toLowerCase();
+   if(!role||!['add','remove'].includes(action)) return message.reply('Usage: `.permit <add|remove> @role`').catch(()=>{});
+   const key='jail_permit_role'; const current=(db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(message.guild.id,key)?.value||'').split(',').filter(Boolean);
+   const set=new Set(current); action==='add'?set.add(role.id):set.delete(role.id);
+   db.prepare('INSERT INTO chilly_config(guild,key,value) VALUES(?,?,?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value').run(message.guild.id,key,[...set].join(','));
+   return message.reply(`${CHILLY_EMOJI.success} ${action==='add'?'Added':'Removed'} ${role} ${action==='add'?'as':'from'} permitted jail staff.`).catch(()=>{});
+  }
+  if(cmd==='pjail') {
+   if(!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return message.reply('⛔ Moderate Members permission required.').catch(()=>{});
+   const target=await fetchMember(args); const roleId=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(message.guild.id,'jail_role')?.value;
+   if(!target||!roleId) return message.reply('Usage: `.pjail @member [reason]` — configure jail first.').catch(()=>{});
+   const role=message.guild.roles.cache.get(roleId); if(!role) return message.reply('Saved jail role no longer exists.').catch(()=>{});
+   const reason=args.replace(/<@!?\d+>/,'').trim()||'No reason provided'; await target.roles.add(role,reason).catch(()=>null);
+   return message.reply(`🔒 ${target.user.tag} has been permanently jailed.`).catch(()=>{});
+  }
+  if(cmd==='ticket') {
+   const sub=args.split(/\s+/)[0]?.toLowerCase()||''; const rest=args.replace(/^\S+\s*/,'');
+   if(!sub) return message.reply('Use `.ticket claim`, `.ticket close`, `.ticket config`, `.ticket delete`, `.ticket rename`, `.ticket panel`, `.ticket send`, or `.ticket setup`.').catch(()=>{});
+   const topic=message.channel?.topic||''; const match=topic.match(/^chilly-ticket:(\d+):([^:]+):(\d+):?(\d*)$/);
+   if(sub==='claim') { if(!match) return message.reply('This channel is not a Chilly ticket.').catch(()=>{}); const [,opener,key,role,claimer]=match; if(claimer) return message.reply(`Already claimed by <@${claimer}>.`).catch(()=>{}); if(!message.member.roles.cache.has(role)&&!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply('Only assigned ticket staff can claim this ticket.').catch(()=>{}); await message.channel.setTopic(`chilly-ticket:${opener}:${key}:${role}:${message.author.id}`); return message.reply(`Ticket claimed by ${message.author}.`).catch(()=>{}); }
+   if(sub==='close') { if(!match||!match[4]) return message.reply('This is not a claimed Chilly ticket.').catch(()=>{}); if(match[4]!==message.author.id&&!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply('Only the claiming staff member or an Administrator can close it.').catch(()=>{}); await message.channel.permissionOverwrites.edit(match[1],{SendMessages:false}).catch(()=>{}); return message.reply('🔒 Ticket closed and locked.').catch(()=>{}); }
+   if(sub==='delete') { if(!match&&!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply('Only an Administrator can delete a non-ticket channel.').catch(()=>{}); await message.channel.delete('Ticket deleted by command').catch(()=>{}); return; }
+   if(sub==='rename') { if(!match) return message.reply('This channel is not a Chilly ticket.').catch(()=>{}); const name=rest.trim().toLowerCase().replace(/[^a-z0-9-]/g,'-').slice(0,90); if(!name) return message.reply('Usage: `.ticket rename <new_name>`').catch(()=>{}); await message.channel.setName(name); return message.reply(`${CHILLY_EMOJI.success} Ticket renamed to **${name}**.`).catch(()=>{}); }
+   if(['config','panel','send','setup','edit'].includes(sub)) return message.reply('Ticket configuration is managed with `/ticket-setup`. Existing configured panels remain available.').catch(()=>{});
+  }
+ }
  if(prefixRaw.startsWith('.') && !/^\.(?:dm|staff|remove|withdraw|withdraw-paid|rich|bal|prof|rank)\b/i.test(prefixRaw)) {
   const parsed=await parsePrefixCommand(message,prefixRaw);
   if(parsed) {
