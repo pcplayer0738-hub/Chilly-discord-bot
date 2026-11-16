@@ -467,7 +467,7 @@ function chillyHelpPayload() {
   '<:1000022241:1571576510081536081> **Links**',
   `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
  ].join('\n');
- const embed = chillyStyledEmbed({title:'<:1000022239:1571576504599712004> Hey, I\'m Chilly™',description,thumbnail:true,timestamp:false,footer:'Chilly • Powered by Spidyyy'});
+ const embed = chillyStyledEmbed({title:'<:1000022239:1571576504599712004> Hey, I\'m Chilly™',description,thumbnail:true,timestamp:false,footer:'Powered By Chilly Development™ | Designed By Spidyyy'});
  return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
 }
 
@@ -1299,7 +1299,7 @@ client.on('interactionCreate', async i=>{
    if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Chilly Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
    const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,security:CHILLY_EMOJI.security,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
-   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Chilly • Command Center'});
+   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Powered By Chilly Development™ | Designed By Spidyyy'});
    return i.update({embeds:[embed],components:i.message.components});
   }
   if(i.isChatInputCommand()) return await handleChatInputCommand(i);
@@ -2170,7 +2170,7 @@ To get started, invite Chilly to your server and use **/help** to explore the av
 
 
 ~ Powered by Spidyyy`,
-   footer:'Chilly • Powered by Spidyyy'});
+   footer:'Powered By Chilly Development™ | Designed By Spidyyy'});
   try {
    await target.send({embeds:[ad]});
    await message.reply(`✅ Advertisement DM sent to ${target.tag}.`).catch(()=>{});
