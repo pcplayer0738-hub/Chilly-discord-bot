@@ -258,7 +258,7 @@ const commands = [
   .addSubcommand(sub=>sub.setName('all').setDescription('Give role to all members').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)))
   .addSubcommand(sub=>sub.setName('bots').setDescription('Give role to bots').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)))
   .addSubcommand(sub=>sub.setName('humans').setDescription('Give role to human members').addRoleOption(o=>o.setName('role').setDescription('Role').setRequired(true)))
-  .addSubcommand(sub=>sub.setName('icon').setDescription('Change a role icon using an emoji').addRoleOption(o=>o.setName('role').setDescription('Role whose icon should change').setRequired(true)).addStringOption(o=>o.setName('emoji').setDescription('Emoji for the role icon').setRequired(true))),
+  .addSubcommand(sub=>sub.setName('icon').setDescription('Set a role icon using an emoji from this server').addRoleOption(o=>o.setName('role').setDescription('Role to update').setRequired(true)).addStringOption(o=>o.setName('emoji').setDescription('Server emoji (e.g. <:name:id>, :name:, or emoji ID)').setRequired(true))),
  new SlashCommandBuilder().setName('slowmode').setDescription('Set channel slowmode').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .addIntegerOption(o=>o.setName('duration').setDescription('Seconds, 0 to disable').setMinValue(0).setMaxValue(21600).setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Target text channel').addChannelTypes(ChannelType.GuildText).setRequired(false)),
  new SlashCommandBuilder().setName('snipe').setDescription('Show the latest deleted message'),
@@ -523,7 +523,22 @@ async function renderEconomyCard({user, command, reward=0, balance=0, nextClaim=
   ctx.strokeStyle='#243858'; ctx.strokeRect(55,390,1390,135);
   ctx.fillStyle='#8e9bb8'; ctx.font='600 18px Sans'; ctx.fillText('TOP MEMBERS',79,424);
   ctx.font='600 20px Sans'; ctx.fillStyle='#f4f7ff';
-  rows.forEach((r,n)=>ctx.fillText(`#${n+1}  ${String(r.user).slice(0,12)}  •  ${money(r.coins)}`,79,458+n*20));
+  // Show member names/usernames instead of raw Discord user IDs.
+  // Fetch from the guild first when available, then fall back to the global user cache/API.
+  for(let n=0;n<rows.length;n++) {
+   const r=rows[n];
+   let displayName=r.user;
+   try {
+    const member=await (user.guild?.members?.fetch?.(r.user).catch(()=>null));
+    if(member) displayName=member.displayName||member.user.globalName||member.user.username;
+    else {
+     const fetched=await client.users.fetch(r.user).catch(()=>null);
+     if(fetched) displayName=fetched.globalName||fetched.username;
+    }
+   } catch {}
+   displayName=String(displayName).replace(/[\r\n]/g,' ').slice(0,28);
+   ctx.fillText(`#${n+1}  ${displayName}  •  ${money(r.coins)}`,79,458+n*20);
+  }
  } else if(note) {
   box(55,390,1390,135,'Details',note.slice(0,82),'#c9a7ff');
  }
@@ -618,6 +633,25 @@ const CHILLY_EMOJI = {
  ticket: '<:1000022236:1571576497175789599>',
 };
 
+// Resolve a server custom emoji by ID, name, :name:, :id:, or full Discord emoji syntax.
+function resolveServerCustomEmoji(guild, input) {
+ const value=String(input||'').trim();
+ if(!guild || !value) return null;
+ const full=value.match(/^<a?:([A-Za-z0-9_~]+):(\d+)>$/);
+ const named=value.match(/^:([A-Za-z0-9_~]+):$/);
+ const colonId=value.match(/^:(\d+):$/);
+ const bareId=value.match(/^(\d{15,22})$/);
+ const nameId=value.match(/^([A-Za-z0-9_~]+):(\d+)$/);
+ const id=full?.[2]||colonId?.[1]||bareId?.[1]||nameId?.[2];
+ const name=full?.[1]||named?.[1]||nameId?.[1];
+ return (id && guild.emojis.cache.get(id)) || (name && guild.emojis.cache.find(e=>e.name===name)) || null;
+}
+
+function customEmojiMarkup(emoji) {
+ if(!emoji) return null;
+ return emoji.animated ? `<a:${emoji.name}:${emoji.id}>` : `<:${emoji.name}:${emoji.id}>`;
+}
+
 function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=true, timestamp=true, footer='Nexzu • Powered by Spidyyy'}) {
  const embed = new EmbedBuilder().setColor(color);
  if (title) embed.setTitle(String(title));
@@ -628,6 +662,26 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
  if (timestamp) embed.setTimestamp();
  if (footer) embed.setFooter({text:String(footer),iconURL:client.user.displayAvatarURL()});
  return embed;
+}
+
+// Convert simple command replies into Nexzu-styled embeds. Replies that already
+// contain embeds/files/components are left untouched (for example economy image cards).
+function nexzuCommandPayload(payload, commandName='command') {
+ if (typeof payload === 'string') payload={content:payload};
+ if (!payload || typeof payload !== 'object') return payload;
+ if (payload.embeds?.length || payload.files?.length || payload.components?.length) return payload;
+ if (!payload.content) return payload;
+ const text=String(payload.content).trim();
+ let icon=CHILLY_EMOJI.sparkle;
+ let color=0x363640;
+ if (/^(?:⛔|❌|⚠️|🚫)/.test(text)) { icon=CHILLY_EMOJI.rejected; color=0x4a2028; }
+ else if (/^(?:✅|☑️)/.test(text)) { icon=CHILLY_EMOJI.success; color=0x1f4a36; }
+ else if (/^(?:ℹ️|📌)/.test(text)) { icon=CHILLY_EMOJI.utility; }
+ return {
+  ...payload,
+  content: undefined,
+  embeds:[chillyStyledEmbed({title:`${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`,description:text,color})]
+ };
 }
 
 function chillyHelpPayload() {
@@ -685,6 +739,12 @@ const linkPattern = /https?:\/\/|discord\.gg\//i;
 
 client.once('ready', async()=>{
  console.log('Nexzu online as '+client.user.tag);
+ // Refresh the known custom emoji markup from the server cache so animated/static
+ // status and renamed emoji IDs are always rendered in Discord's valid format.
+ for(const guild of client.guilds.cache.values()) {
+  const emoji=resolveServerCustomEmoji(guild,'1000022219');
+  if(emoji) { CHILLY_EMOJI.rejected=customEmojiMarkup(emoji); break; }
+ }
  client.user.setPresence({
   activities:[{name:'Powered by Spidyyy',type:ActivityType.Playing}],
   status:'online'
@@ -805,6 +865,11 @@ async function stealFromSourceMessage(guild, sourceMessage) {
 
 async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
+  // All normal text replies become branded embeds. Image/card replies remain untouched.
+  const _reply=i.reply?.bind(i), _followUp=i.followUp?.bind(i), _editReply=i.editReply?.bind(i);
+  if (_reply) i.reply=(payload)=>_reply(nexzuCommandPayload(payload,c));
+  if (_followUp) i.followUp=(payload)=>_followUp(nexzuCommandPayload(payload,c));
+  if (_editReply) i.editReply=(payload)=>_editReply(nexzuCommandPayload(payload,c));
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
   const target=i.options.getUser('user', false);
@@ -1282,24 +1347,35 @@ Logs: <#${log.id}>`,flags:MessageFlags.Ephemeral});
    if(sub==='messages' && i.options.getUser('member')) filtered=filtered.filter(m=>m.author?.id===i.options.getUser('member').id);
    const deleted=await i.channel.bulkDelete(filtered.slice(0,amount),true); return i.reply({content:`🧹 Deleted **${deleted.size}** message(s).`,flags:MessageFlags.Ephemeral});
   }
-  if(c==='role' && i.options.getSubcommand?.() === 'icon') {
-   const role=i.options.getRole('role',true);
-   const emoji=i.options.getString('emoji',true).trim();
-   const canUse = u.id===TRUSTED_OWNER_ID || u.id===g.ownerId || i.memberPermissions?.has(PermissionFlagsBits.Administrator) || i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || i.memberPermissions?.has(PermissionFlagsBits.ManageRoles);
-   if(!canUse) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Access Denied`,description:'Only the **server owner**, **bot owner**, **Administrators**, or **Managers with Manage Server/Manage Roles** can change role icons.',color:0xED4245,footer:'Nexzu • Role Icon'})],flags:MessageFlags.Ephemeral});
-   if(!g.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Missing Permission`,description:'I need the **Manage Roles** permission to change role icons.',color:0xED4245,footer:'Nexzu • Role Icon'})],flags:MessageFlags.Ephemeral});
-   if(role.id===g.id || role.managed || role.position>=g.members.me.roles.highest.position) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Role Hierarchy`,description:'Move my bot role **above** the selected role and choose a normal role.',color:0xED4245,footer:'Nexzu • Role Icon'})],flags:MessageFlags.Ephemeral});
-   if(emoji.length>100) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Invalid Emoji`,description:'Please provide one valid emoji.',color:0xED4245,footer:'Nexzu • Role Icon'})],flags:MessageFlags.Ephemeral});
-   try {
-    await role.setIcon(emoji,'Role icon changed by Nexzu');
-    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Role Icon Updated`,description:`${CHILLY_EMOJI.dot} **Role:** ${role}\n${CHILLY_EMOJI.dot} **Icon:** ${emoji}\n\nRole icon has been updated successfully.`,footer:'Nexzu • Role Icon'})]});
-   } catch(err) {
-    console.error('Role icon update:',err?.message||err);
-    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Role Icon Failed`,description:'I could not set that emoji as the role icon. Make sure it is a valid supported emoji and that my role is high enough.',color:0xED4245,footer:'Nexzu • Role Icon'})],flags:MessageFlags.Ephemeral});
-   }
-  }
   if(c==='roleall' || c==='role') {
-   const role=i.options.getRole('role',true), type=c==='roleall'?'all':i.options.getSubcommand();
+   const type=c==='roleall'?'all':i.options.getSubcommand();
+   if(c==='role' && type==='icon') {
+    const role=i.options.getRole('role',true), emojiInput=i.options.getString('emoji',true);
+    const actor=i.member;
+    const allowed=actor?.id===TRUSTED_OWNER_ID || actor?.id===g.ownerId || actor?.permissions.has(PermissionFlagsBits.Administrator) || actor?.permissions.has(PermissionFlagsBits.ManageGuild) || actor?.permissions.has(PermissionFlagsBits.ManageRoles);
+    if(!allowed) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Permission Denied`,description:'Only the server owner, bot owner, Administrators, or members with role-management permissions can use this command.',color:0x4a2028})],flags:MessageFlags.Ephemeral});
+    const botMember=g.members.me || await g.members.fetchMe().catch(()=>null);
+    if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Missing Permission`,description:'I need **Manage Roles** permission to change role icons.',color:0x4a2028})],flags:MessageFlags.Ephemeral});
+    if(!role || role.id===g.id || role.managed || role.position>=botMember.roles.highest.position) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Role Hierarchy`,description:'Move my highest role above the selected role and choose a normal, non-managed role.',color:0x4a2028})],flags:MessageFlags.Ephemeral});
+    const emoji=resolveServerCustomEmoji(g,emojiInput);
+    if(!emoji) return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Invalid Server Emoji`,description:'Use a custom emoji that already exists in this server. Examples: `:emoji_name:`, `<:emoji_name:id>`, or the emoji ID.',color:0x4a2028})],flags:MessageFlags.Ephemeral});
+    try {
+     const url=emoji.imageURL({extension:emoji.animated?'gif':'png',size:128});
+     const response=await fetch(url);
+     if(!response.ok) throw new Error(`Emoji CDN returned ${response.status}`);
+     const buffer=Buffer.from(await response.arrayBuffer());
+     await role.setIcon(buffer, `Role icon changed by ${actor.user.tag}`);
+     const shown=customEmojiMarkup(emoji)||emoji.toString();
+     return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Role Icon Updated`,description:`${CHILLY_EMOJI.dot} **Role:** ${role}
+${CHILLY_EMOJI.dot} **Icon:** ${shown}
+
+The role icon was updated using a custom emoji from this server.`,color:0x1f4a36,footer:'Nexzu • Role Management'})]});
+    } catch(error) {
+     console.error('role-icon failed:',error);
+     return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.rejected} Role Icon Failed`,description:'I could not set that server emoji as the role icon. Make sure **Role Icons** are enabled, my role is high enough, and the emoji is available to Nexzu.',color:0x4a2028,footer:'Nexzu • Role Management'})],flags:MessageFlags.Ephemeral});
+    }
+   }
+   const role=i.options.getRole('role',true);
    if(role.id===g.id||role.managed||role.position>=g.members.me.roles.highest.position) return i.reply({content:'⛔ Move my bot role above the selected role and choose a normal role.',flags:MessageFlags.Ephemeral});
    if(!g.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({content:'I need Manage Roles permission.',flags:MessageFlags.Ephemeral});
    await i.deferReply({flags:MessageFlags.Ephemeral}); const members=await g.members.fetch().catch(()=>null); if(!members) return i.editReply('❌ Could not fetch server members.');
@@ -2145,6 +2221,10 @@ function makePrefixInteraction(message, parsed) {
 }
 
 client.on('messageCreate', async message => {
+ // Prefix command replies use the same branded embed style as slash commands.
+ // Existing embed/image replies are preserved by nexzuCommandPayload().
+ const _messageReply=message.reply.bind(message);
+ message.reply=(payload)=>_messageReply(nexzuCommandPayload(payload, (message.content.trim().match(/^\.([a-z0-9-]+)/i)||[])[1] || 'command'));
  // Staff management: authorised managers only.
  if (!message.author.bot && message.guild) {
   const rawStaff = message.content.trim();
@@ -3048,7 +3128,13 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  // Count ordinary, non-command chat messages for INR rewards.
  // Bots, webhooks, very short messages and bot commands do not earn rewards.
  const rewardText = message.content.trim();
- if(!message.author.bot && !message.webhookId && rewardText.length >= 3 &&
+ const rewardSpamKey = `${message.guild.id}:${message.author.id}`;
+ const rewardNow = Date.now();
+ const rewardHistory = (recentMessages.get(rewardSpamKey)||[]).filter(x=>rewardNow-x.time<7000);
+ const rewardRepeated = rewardHistory.filter(x=>x.content===rewardText.toLowerCase()).length >= 2;
+ const rewardRapid = rewardHistory.length >= 5;
+ const isSpamForReward = Boolean(cfg.antispam && !message.member.permissions.has(PermissionFlagsBits.ManageMessages) && (rewardRepeated || rewardRapid));
+ if(!message.author.bot && !message.webhookId && rewardText.length >= 3 && !isSpamForReward &&
     !/^(?:[.!/?]|chilly\s|c\s)/i.test(rewardText)) {
   db.prepare('INSERT OR IGNORE INTO real_money_users(guild,user) VALUES(?,?)').run(message.guild.id,message.author.id);
   const before = db.prepare('SELECT messages FROM real_money_users WHERE guild=? AND user=?').get(message.guild.id,message.author.id);
@@ -3070,8 +3156,10 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  }
  if(cfg.antispam) {
   const key=`${message.guild.id}:${message.author.id}`, now=Date.now();
-  const arr=(recentMessages.get(key)||[]).filter(t=>now-t<7000); arr.push(now); recentMessages.set(key,arr);
-  if(arr.length>=6 && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+  const arr=(recentMessages.get(key)||[]).filter(x=>now-(typeof x==='number'?x:x.time)<7000);
+  arr.push({time:now,content:message.content.trim().toLowerCase()}); recentMessages.set(key,arr);
+  const repeated=arr.filter(x=>typeof x!=='number' && x.content===message.content.trim().toLowerCase()).length>=3;
+  if((arr.length>=6 || repeated) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
    await message.delete().catch(()=>{});
    await logAction(message.guild,auditEmbed('🚫 Anti-spam Triggered',0xE67E22,[{name:'Member',value:`${message.author.tag} (${message.author.id})`},{name:'Channel',value:`${message.channel}`},{name:'Detection',value:'6 messages within 7 seconds.'}]));
    recentMessages.set(key,[]);
