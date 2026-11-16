@@ -3172,6 +3172,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  }
  // Count ordinary, non-command chat messages for INR rewards.
  // Bots, webhooks, very short messages and bot commands do not earn rewards.
+ const cfg = settings(message.guild.id);
  const rewardText = message.content.trim();
  const rewardSpamKey = `${message.guild.id}:${message.author.id}`;
  const rewardNow = Date.now();
@@ -3194,7 +3195,6 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   }
  }
 
- const cfg=settings(message.guild.id);
  if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
   await message.delete().catch(()=>{});
   await message.channel.send({content:`${message.author}, links are disabled in this server.`,allowedMentions:{users:[message.author.id]}}).then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000)).catch(()=>{});
