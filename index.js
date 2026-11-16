@@ -522,7 +522,22 @@ async function renderEconomyCard({user, command, reward=0, balance=0, nextClaim=
   ctx.strokeStyle='#243858'; ctx.strokeRect(55,390,1390,135);
   ctx.fillStyle='#8e9bb8'; ctx.font='600 18px Sans'; ctx.fillText('TOP MEMBERS',79,424);
   ctx.font='600 20px Sans'; ctx.fillStyle='#f4f7ff';
-  rows.forEach((r,n)=>ctx.fillText(`#${n+1}  ${String(r.user).slice(0,12)}  •  ${money(r.coins)}`,79,458+n*20));
+  // Show member names/usernames instead of raw Discord user IDs.
+  // Fetch from the guild first when available, then fall back to the global user cache/API.
+  for(let n=0;n<rows.length;n++) {
+   const r=rows[n];
+   let displayName=r.user;
+   try {
+    const member=await (user.guild?.members?.fetch?.(r.user).catch(()=>null));
+    if(member) displayName=member.displayName||member.user.globalName||member.user.username;
+    else {
+     const fetched=await client.users.fetch(r.user).catch(()=>null);
+     if(fetched) displayName=fetched.globalName||fetched.username;
+    }
+   } catch {}
+   displayName=String(displayName).replace(/[\r\n]/g,' ').slice(0,28);
+   ctx.fillText(`#${n+1}  ${displayName}  •  ${money(r.coins)}`,79,458+n*20);
+  }
  } else if(note) {
   box(55,390,1390,135,'Details',note.slice(0,82),'#c9a7ff');
  }
@@ -627,6 +642,26 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
  if (timestamp) embed.setTimestamp();
  if (footer) embed.setFooter({text:String(footer),iconURL:client.user.displayAvatarURL()});
  return embed;
+}
+
+// Convert simple command replies into Nexzu-styled embeds. Replies that already
+// contain embeds/files/components are left untouched (for example economy image cards).
+function nexzuCommandPayload(payload, commandName='command') {
+ if (typeof payload === 'string') payload={content:payload};
+ if (!payload || typeof payload !== 'object') return payload;
+ if (payload.embeds?.length || payload.files?.length || payload.components?.length) return payload;
+ if (!payload.content) return payload;
+ const text=String(payload.content).trim();
+ let icon=CHILLY_EMOJI.sparkle;
+ let color=0x363640;
+ if (/^(?:⛔|❌|⚠️|🚫)/.test(text)) { icon=CHILLY_EMOJI.rejected; color=0x4a2028; }
+ else if (/^(?:✅|☑️)/.test(text)) { icon=CHILLY_EMOJI.success; color=0x1f4a36; }
+ else if (/^(?:ℹ️|📌)/.test(text)) { icon=CHILLY_EMOJI.utility; }
+ return {
+  ...payload,
+  content: undefined,
+  embeds:[chillyStyledEmbed({title:`${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`,description:text,color})]
+ };
 }
 
 function chillyHelpPayload() {
@@ -804,6 +839,11 @@ async function stealFromSourceMessage(guild, sourceMessage) {
 
 async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
+  // All normal text replies become branded embeds. Image/card replies remain untouched.
+  const _reply=i.reply?.bind(i), _followUp=i.followUp?.bind(i), _editReply=i.editReply?.bind(i);
+  if (_reply) i.reply=(payload)=>_reply(nexzuCommandPayload(payload,c));
+  if (_followUp) i.followUp=(payload)=>_followUp(nexzuCommandPayload(payload,c));
+  if (_editReply) i.editReply=(payload)=>_editReply(nexzuCommandPayload(payload,c));
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
   const target=i.options.getUser('user', false);
@@ -2128,6 +2168,10 @@ function makePrefixInteraction(message, parsed) {
 }
 
 client.on('messageCreate', async message => {
+ // Prefix command replies use the same branded embed style as slash commands.
+ // Existing embed/image replies are preserved by nexzuCommandPayload().
+ const _messageReply=message.reply.bind(message);
+ message.reply=(payload)=>_messageReply(nexzuCommandPayload(payload, (message.content.trim().match(/^\.([a-z0-9-]+)/i)||[])[1] || 'command'));
  // Staff management: authorised managers only.
  if (!message.author.bot && message.guild) {
   const rawStaff = message.content.trim();
