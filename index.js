@@ -343,6 +343,82 @@ function account(g,u) {
 }
 
 function money(n) { return n.toLocaleString('en-US')+' Chilly Coins'; }
+
+// Dynamic personalized economy cards. A fresh image is rendered on every economy
+// action so each user always sees their own balance, reward and live leaderboard rank.
+function economyRank(userId) {
+ const row = db.prepare(`SELECT COUNT(*) + 1 AS rank FROM global_users WHERE coins > (SELECT coins FROM global_users WHERE user=?)`).get(userId);
+ return Number(row?.rank || 1);
+}
+
+function economyMemberCount() {
+ return Number(db.prepare('SELECT COUNT(*) AS count FROM global_users').get()?.count || 0);
+}
+
+async function renderEconomyCard({user, command, reward=0, balance=0, nextClaim=null, note='', opponent=null}) {
+ const { createCanvas, loadImage } = require('@napi-rs/canvas');
+ const canvas = createCanvas(1500, 650);
+ const ctx = canvas.getContext('2d');
+ const bg = ctx.createLinearGradient(0, 0, 1500, 650);
+ bg.addColorStop(0, '#0a1020'); bg.addColorStop(0.55, '#111b34'); bg.addColorStop(1, '#07101c');
+ ctx.fillStyle = bg; ctx.fillRect(0, 0, 1500, 650);
+ ctx.fillStyle = '#69d8ff'; ctx.fillRect(0, 0, 520, 10);
+ ctx.fillStyle = '#182642'; ctx.fillRect(520, 0, 980, 10);
+ ctx.globalAlpha = 0.14; ctx.fillStyle = '#69d8ff';
+ ctx.beginPath(); ctx.arc(1370, 100, 210, 0, Math.PI*2); ctx.fill();
+ ctx.beginPath(); ctx.arc(100, 610, 190, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
+
+ try {
+  const avatar = await loadImage(user.displayAvatarURL({extension:'png', size:256}));
+  ctx.save(); ctx.beginPath(); ctx.arc(108, 112, 64, 0, Math.PI*2); ctx.clip();
+  ctx.drawImage(avatar, 44, 48, 128, 128); ctx.restore();
+  ctx.strokeStyle = '#69d8ff'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(108,112,66,0,Math.PI*2); ctx.stroke();
+ } catch {}
+
+ const titles={daily:'DAILY REWARD',work:'WORK COMPLETE',balance:'BALANCE',pay:'COIN TRANSFER',shop:'CHILLY SHOP',buy:'PURCHASE COMPLETE',inventory:'INVENTORY',slots:'CHILLY SLOTS',leaderboard:'COIN LEADERBOARD',money:'COINS UPDATED'};
+ ctx.fillStyle='#f5f8ff'; ctx.font='700 34px Sans'; ctx.fillText(titles[command]||'CHILLY ECONOMY',205,90);
+ ctx.fillStyle='#8e9bb8'; ctx.font='500 23px Sans'; ctx.fillText('@'+String(user.username).slice(0,32),205,125);
+
+ const rank=economyRank(user.id), total=economyMemberCount();
+ const box=(x,y,w,h,label,value,accent='#69d8ff')=>{
+  ctx.fillStyle='#111a2b'; ctx.fillRect(x,y,w,h); ctx.strokeStyle='#243858'; ctx.lineWidth=2; ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle='#8e9bb8'; ctx.font='600 18px Sans'; ctx.fillText(label.toUpperCase(),x+24,y+34);
+  ctx.fillStyle=accent; ctx.font='700 31px Sans'; ctx.fillText(String(value).slice(0,38),x+24,y+76);
+ };
+ box(55,220,430,135,'Wallet',money(balance));
+ box(535,220,430,135,'Leaderboard Rank','#'+rank,'#ffd66b');
+ box(1015,220,430,135,'Ranked Members',String(total),'#9bbcff');
+ if(command==='daily'||command==='work') {
+  box(55,390,430,135,'Reward','+'+money(reward),'#70f0a6');
+  if(nextClaim) {
+   const remaining=Math.max(0,nextClaim-Math.floor(Date.now()/1000));
+   const mins=Math.floor(remaining/60), hrs=Math.floor(mins/60);
+   const countdown=hrs>0?`${hrs}h ${mins%60}m`:mins>0?`${mins}m`: `${remaining}s`;
+   box(535,390,910,135,'Next Claim',countdown,'#c9a7ff');
+  }
+ } else if(command==='pay') {
+  box(55,390,670,135,'Sent To',opponent?'@'+String(opponent.username).slice(0,26):'Member','#f4f7ff');
+  box(775,390,670,135,'Amount',money(reward),'#70f0a6');
+ } else if(command==='buy') {
+  box(55,390,670,135,'Item',note||'Item','#f4f7ff');
+  box(775,390,670,135,'Spent',money(reward),'#ff9e9e');
+ } else if(command==='slots') {
+  box(55,390,670,135,'Result',note||'Completed','#70f0a6');
+  box(775,390,670,135,'Win / Bet',money(reward),'#ffd66b');
+ } else if(command==='leaderboard') {
+  const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC, user ASC LIMIT 5').all();
+  ctx.fillStyle='#111a2b'; ctx.fillRect(55,390,1390,135);
+  ctx.strokeStyle='#243858'; ctx.strokeRect(55,390,1390,135);
+  ctx.fillStyle='#8e9bb8'; ctx.font='600 18px Sans'; ctx.fillText('TOP MEMBERS',79,424);
+  ctx.font='600 20px Sans'; ctx.fillStyle='#f4f7ff';
+  rows.forEach((r,n)=>ctx.fillText(`#${n+1}  ${String(r.user).slice(0,12)}  •  ${money(r.coins)}`,79,458+n*20));
+ } else if(note) {
+  box(55,390,1390,135,'Details',note.slice(0,82),'#c9a7ff');
+ }
+ ctx.fillStyle='#64728f'; ctx.font='500 18px Sans';
+ ctx.fillText('Powered By Chilly Development™ | Designed By Spidyyy',55,610);
+ return canvas.toBuffer('image/png');
+}
 function choose(a,n) {
  const x=[...a], r=[];
  while(x.length&&r.length<n) r.push(x.splice(Math.floor(Math.random()*x.length),1)[0]);
@@ -742,7 +818,8 @@ Message: ${message}`:''}`,ephemeral:true});
    account(g.id,to.id);
    db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    const updated=account(g.id,to.id);
-   return i.reply('💰 Added **'+money(amount)+'** to <@'+to.id+'>. New balance: **'+money(updated.coins)+'**.');
+   const buffer=await renderEconomyCard({user:to,command:'money',reward:amount,balance:updated.coins,note:'Coins added by the server owner'});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'money.png'})]});
   }
   if(c==='ticket-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return i.reply({content:'⛔ Only members with Administrator permission can configure tickets.',ephemeral:true});
@@ -809,26 +886,33 @@ Logs: <#${log.id}>`,ephemeral:true});
   if(c==='help') return i.reply(chillyHelpPayload());
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
-   return i.reply('💰 **'+who.username+'** has **'+money(a.coins)+'**.');
+   const buffer=await renderEconomyCard({user:who,command:'balance',balance:a.coins,note:`Rank #${economyRank(who.id)} on the global Chilly economy`});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'balance.png'})]});
   }
   if(c==='slots') {
    const bet=i.options.getInteger('bet'), a=account(g.id,u.id);
    if(a.coins<bet) return i.reply({content:'Not enough Chilly Coins for that bet.',ephemeral:true});
    const symbols=['🍒','🍋','🍇','⭐','🔔']; const roll=[0,1,2].map(()=>symbols[Math.floor(Math.random()*symbols.length)]);
    let multiplier=roll[0]===roll[1]&&roll[1]===roll[2]? (roll[0]==='⭐'?5:3) : (roll[0]===roll[1]||roll[1]===roll[2]||roll[0]===roll[2]?1:0);
-   const delta=multiplier?bet*multiplier: -bet;
+   const delta=multiplier?bet*multiplier:-bet;
    db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(delta,u.id);
-   return i.reply('🎰 **Chilly Slots**\n'+roll.join(' | ')+'\n'+(multiplier?'🎉 You won **'+money(bet*multiplier)+'**!':'😢 You lost **'+money(bet)+'**.')+'\nBalance: **'+money(account(g.id,u.id).coins)+'**');
+   const updated=account(g.id,u.id), win=multiplier?bet*multiplier:0;
+   const buffer=await renderEconomyCard({user:u,command:'slots',balance:updated.coins,reward:win||bet,note:roll.join(' | ')});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'slots.png'})]});
   }
   if(c==='daily'||c==='work') {
    const a=account(g.id,u.id), now=Math.floor(Date.now()/1000);
    const col=c==='daily'?'daily':'worked', cd=c==='daily'?86400:3600;
    const amount=c==='daily'?500:Math.floor(Math.random()*201)+100;
-   if(now-a[col]<cd) { const next=now+(cd-(now-a[col])); return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} ${c==='daily'?'Daily Reward':'Work Cooldown'}`,description:`${CHILLY_EMOJI.dot} You can claim again <t:${next}:R>.`,footer:'Chilly • Economy'})],ephemeral:true}); }
+   if(now-a[col]<cd) {
+    const next=now+(cd-(now-a[col]));
+    const buffer=await renderEconomyCard({user:u,command:c,reward:0,balance:a.coins,nextClaim:next,note:'Cooldown active'});
+    return i.reply({files:[new AttachmentBuilder(buffer,{name:c+'-cooldown.png'})],ephemeral:true});
+   }
    db.prepare('UPDATE global_users SET coins=coins+?, '+col+'=? WHERE user=?').run(amount,now,u.id);
    const updated=account(g.id,u.id);
-   if(c==='daily') return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Daily Claim Successful`,description:`${CHILLY_EMOJI.success} You collected your daily reward!\n\n<:1000022243:1571576512547782718> **Reward:** ${money(amount)}\n<:1000022243:1571576512547782718> **Wallet:** ${money(updated.coins)}\n<:1000022243:1571576512547782718> **Next claim:** <t:${now+86400}:R>`,footer:'Chilly • Daily Rewards'})]});
-   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Work Complete`,description:`You earned **${money(amount)}**.\nWallet: **${money(updated.coins)}**`,footer:'Chilly • Economy'})]});
+   const buffer=await renderEconomyCard({user:u,command:c,reward:amount,balance:updated.coins,nextClaim:now+cd});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:c+'-economy.png'})]});
   }
   if(c==='pay') {
    const to=i.options.getUser('user'), amount=i.options.getInteger('amount');
@@ -839,14 +923,19 @@ Logs: <#${log.id}>`,ephemeral:true});
     db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(amount,u.id);
     db.prepare('UPDATE global_users SET coins=coins+? WHERE user=?').run(amount,to.id);
    })();
-   return i.reply('💳 | **<@'+u.id+'>** sent **'+amount.toLocaleString('en-US')+' Chilly Coins** to **<@'+to.id+'>**!');
+   const updated=account(g.id,u.id);
+   const buffer=await renderEconomyCard({user:u,command:'pay',reward:amount,balance:updated.coins,opponent:to,note:`Transfer completed to ${to.username}`});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'pay.png'})]});
   }
   if(c==='leaderboard') {
-   const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC LIMIT 10').all();
-   const embed=chillyStyledEmbed({title:`${CHILLY_EMOJI.crown} Coin Leaderboard`,description:rows.map((r,n)=>(n+1)+'. <@'+r.user+'> — '+money(r.coins)).join('\n')||'No users yet.',footer:'Chilly • Economy • Global Leaderboard'});
-   return i.reply({embeds:[embed]});
+   const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC, user ASC LIMIT 10').all();
+   const buffer=await renderEconomyCard({user:u,command:'leaderboard',balance:account(g.id,u.id).coins,note:(rows.some(r=>r.user===u.id)?`You are #${rows.findIndex(r=>r.user===u.id)+1} in the top 10`:`Your current rank is #${economyRank(u.id)}`)});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'leaderboard.png'})]});
   }
-  if(c==='shop') return i.reply('🛍️ **Chilly Shop**\n🍪 Cookie: 100\n☕ Coffee: 250\n👑 Golden Crown: 1000 coins\nUse `/buy`.');
+  if(c==='shop') {
+   const buffer=await renderEconomyCard({user:u,command:'shop',balance:account(g.id,u.id).coins,note:'Cookie 100 • Coffee 250 • Golden Crown 1000'});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'shop.png'})]});
+  }
   if(c==='buy') {
    const item=i.options.getString('item'), price={'Cookie':100,'Coffee':250,'Golden Crown':1000}[item], a=account(g.id,u.id);
    if(a.coins<price) return i.reply({content:'Not enough coins.',ephemeral:true});
@@ -854,11 +943,14 @@ Logs: <#${log.id}>`,ephemeral:true});
     db.prepare('UPDATE global_users SET coins=coins-? WHERE user=?').run(price,u.id);
     db.prepare('INSERT INTO global_inventory(user,item,quantity) VALUES(?,?,1) ON CONFLICT(user,item) DO UPDATE SET quantity=quantity+1').run(u.id,item);
    })();
-   return i.reply('✅ Purchased **'+item+'**!');
+   const updated=account(g.id,u.id);
+   const buffer=await renderEconomyCard({user:u,command:'buy',reward:price,balance:updated.coins,note:item});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'buy.png'})]});
   }
   if(c==='inventory') {
    const who=target||u, rows=db.prepare('SELECT item,quantity FROM global_inventory WHERE user=?').all(who.id);
-   return i.reply('🎒 **'+who.username+'**: '+(rows.map(x=>x.item+' × '+x.quantity).join(', ')||'Empty'));
+   const buffer=await renderEconomyCard({user:who,command:'inventory',balance:account(g.id,who.id).coins,note:rows.map(x=>x.item+' × '+x.quantity).join(' • ')||'Inventory is empty'});
+   return i.reply({files:[new AttachmentBuilder(buffer,{name:'inventory.png'})]});
   }
   if(c==='setlogs') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
