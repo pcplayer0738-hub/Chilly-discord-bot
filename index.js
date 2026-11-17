@@ -367,8 +367,9 @@ const commands = [
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
  new SlashCommandBuilder().setName('levelup-setup').setDescription('Configure level-up announcements for this server')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addChannelOption(o=>o.setName('channel').setDescription('Announcement channel (omit to use the current channel; use off to disable via message option)').addChannelTypes(ChannelType.GuildText).setRequired(false))
-  .addStringOption(o=>o.setName('message').setDescription('Message tags: {user}, {level}, {xp}').setMaxLength(1000).setRequired(false)),
+  .addChannelOption(o=>o.setName('channel').setDescription('Announcement channel (where the level-up is posted)').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addChannelOption(o=>o.setName('chat_channel').setDescription('Channel mentioned in the level-up message').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addStringOption(o=>o.setName('message').setDescription('Message tags: {user}, {level}, {xp}, {channel}').setMaxLength(1000).setRequired(false)),
  new SlashCommandBuilder().setName('levelrole').setDescription('Configure level-based role rewards')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
   .addSubcommand(sub=>sub.setName('add').setDescription('Give a role at a specific level')
@@ -460,6 +461,77 @@ function getLevelRow(guildId,userId) {
  db.prepare('INSERT OR IGNORE INTO leveling_xp(guild,user,xp,last_message) VALUES(?,?,0,0)').run(guildId,userId);
  return db.prepare('SELECT * FROM leveling_xp WHERE guild=? AND user=?').get(guildId,userId);
 }
+
+async function renderLevelUpCard(member, oldLevel, newLevel) {
+  const { createCanvas, loadImage } = require('@napi-rs/canvas');
+  const W=1500, H=650;
+  const canvas=createCanvas(W,H), ctx=canvas.getContext('2d');
+
+  // Arcane-inspired dark level-up card: same overall composition as the supplied reference,
+  // but branded for Nexzu and generated dynamically for every member.
+  ctx.fillStyle='#202327';
+  ctx.fillRect(0,0,W,H);
+
+  const cardX=28, cardY=28, cardW=W-56, cardH=H-56, radius=46;
+  ctx.beginPath();
+  ctx.moveTo(cardX+radius,cardY);
+  ctx.arcTo(cardX+cardW,cardY,cardX+cardW,cardY+cardH,radius);
+  ctx.arcTo(cardX+cardW,cardY+cardH,cardX,cardY+cardH,radius);
+  ctx.arcTo(cardX,cardY+cardH,cardX,cardY,radius);
+  ctx.arcTo(cardX,cardY,cardX+cardW,cardY,radius);
+  ctx.closePath();
+  ctx.fillStyle='#181b1f';
+  ctx.fill();
+
+  // Subtle purple-blue glow.
+  const glow=ctx.createRadialGradient(1110,150,40,1110,150,520);
+  glow.addColorStop(0,'rgba(112,92,255,0.20)');
+  glow.addColorStop(1,'rgba(112,92,255,0)');
+  ctx.fillStyle=glow;
+  ctx.fillRect(cardX,cardY,cardW,cardH);
+
+  const avatarSize=300, avatarX=105, avatarY=175;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(avatarX+avatarSize/2,avatarY+avatarSize/2,avatarSize/2,0,Math.PI*2);
+  ctx.clip();
+  try {
+    const url=member.user.displayAvatarURL({extension:'png',size:512});
+    const avatar=await loadImage(url);
+    ctx.drawImage(avatar,avatarX,avatarY,avatarSize,avatarSize);
+  } catch {
+    ctx.fillStyle='#30343b';
+    ctx.fillRect(avatarX,avatarY,avatarSize,avatarSize);
+  }
+  ctx.restore();
+
+  const name=member.displayName || member.user.globalName || member.user.username;
+  ctx.textBaseline='middle';
+  ctx.font='700 62px Sans';
+  ctx.fillStyle='#ffffff';
+  ctx.fillText('Level-up!',520,205);
+
+  ctx.font='700 72px Sans';
+  const oldText=String(oldLevel), newText=String(newLevel), sep=' • ';
+  const oldW=ctx.measureText(oldText).width, sepW=ctx.measureText(sep).width;
+  ctx.fillStyle='#d8d8df';
+  ctx.fillText(oldText,650,390);
+  ctx.fillStyle='#ffffff';
+  ctx.fillText(sep,650+oldW,390);
+  ctx.fillStyle='#a88cff';
+  ctx.fillText(newText,650+oldW+sepW,390);
+
+  ctx.font='600 28px Sans';
+  ctx.fillStyle='#9ca0a8';
+  const safeName=name.length>28 ? name.slice(0,25)+'...' : name;
+  ctx.fillText(safeName,520,500);
+  ctx.fillStyle='#737782';
+  ctx.font='500 24px Sans';
+  ctx.fillText('Nexzu • Leveling',520,545);
+
+  return canvas.toBuffer('image/png');
+}
+
 function account(g,u) {
  db.prepare('INSERT OR IGNORE INTO global_users(user) VALUES(?)').run(u);
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
@@ -480,7 +552,7 @@ function economyMemberCount() {
 
 async function renderEconomyCard({user, command, reward=0, balance=0, nextClaim=null, note='', opponent=null}) {
  const { createCanvas, loadImage } = require('@napi-rs/canvas');
- const canvas = createCanvas(1500, 650);
+ const canvas = createCanvas(command==='leaderboard' ? 1500 : 1500, command==='leaderboard' ? 900 : 650);
  const ctx = canvas.getContext('2d');
  const bg = ctx.createLinearGradient(0, 0, 1500, 650);
  bg.addColorStop(0, '#0a1020'); bg.addColorStop(0.55, '#111b34'); bg.addColorStop(1, '#07101c');
@@ -529,32 +601,46 @@ async function renderEconomyCard({user, command, reward=0, balance=0, nextClaim=
   box(55,390,670,135,'Result',note||'Completed','#70f0a6');
   box(775,390,670,135,'Win / Bet',money(reward),'#ffd66b');
  } else if(command==='leaderboard') {
-  const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC, user ASC LIMIT 5').all();
-  ctx.fillStyle='#111a2b'; ctx.fillRect(55,390,1390,135);
-  ctx.strokeStyle='#243858'; ctx.strokeRect(55,390,1390,135);
-  ctx.fillStyle='#8e9bb8'; ctx.font='600 18px Sans'; ctx.fillText('TOP MEMBERS',79,424);
-  ctx.font='600 20px Sans'; ctx.fillStyle='#f4f7ff';
-  // Show member names/usernames instead of raw Discord user IDs.
-  // Fetch from the guild first when available, then fall back to the global user cache/API.
+  const rows=db.prepare('SELECT user,coins FROM global_users ORDER BY coins DESC, user ASC LIMIT 10').all();
+  // Same large purple banner style as .rich, without changing the command itself.
+  ctx.fillStyle='#17181e'; ctx.fillRect(0,0,1500,900);
+  ctx.fillStyle='#6426a8'; ctx.beginPath(); ctx.moveTo(1040,0); ctx.lineTo(1500,0); ctx.lineTo(1500,300); ctx.lineTo(1220,300); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#8138c8'; ctx.beginPath(); ctx.moveTo(1240,0); ctx.lineTo(1500,0); ctx.lineTo(1500,120); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#51405f'; ctx.lineWidth=3; ctx.strokeRect(6,6,1488,888);
+  ctx.fillStyle='#c28be8'; ctx.font='700 25px Arial'; ctx.fillText('NEXBITS LEADERBOARD',62,65);
+  ctx.fillStyle='#f7f5fa'; ctx.font='700 52px Arial'; ctx.fillText('Top Ranked Members',62,132);
+  ctx.fillStyle='#aaa7b4'; ctx.font='400 23px Arial'; ctx.fillText(`Server economy  |  ${rows.length} ranked members`,64,174);
+  ctx.fillStyle='#30213e'; ctx.fillRect(62,210,1376,86);
+  ctx.strokeStyle='#70429a'; ctx.lineWidth=2; ctx.strokeRect(62,210,1376,86);
+  ctx.fillStyle='#c8a3e6'; ctx.font='700 20px Arial'; ctx.fillText('RANK',95,263); ctx.fillText('MEMBER',230,263);
+  ctx.textAlign='right'; ctx.fillText('NEXBITS',1405,263); ctx.textAlign='left';
   for(let n=0;n<rows.length;n++) {
-   const r=rows[n];
-   let displayName=r.user;
+   const r=rows[n], y=318+n*52;
+   ctx.fillStyle=n===0?'#37301f':'#25252d'; ctx.fillRect(62,y,1376,46);
+   ctx.strokeStyle=n===0?'#e6c64d':'#393943'; ctx.lineWidth=n<3?2:1; ctx.strokeRect(62,y,1376,46);
+   ctx.fillStyle=n===0?'#f1d25b':n===1?'#dedee8':n===2?'#dba477':'#c69be6'; ctx.font='700 21px Arial'; ctx.fillText(`#${n+1}`,95,y+30);
+   let displayName=r.user, username='', avatarUrl=null;
    try {
     const member=await (user.guild?.members?.fetch?.(r.user).catch(()=>null));
-    if(member) displayName=member.displayName||member.user.globalName||member.user.username;
-    else {
-     const fetched=await client.users.fetch(r.user).catch(()=>null);
-     if(fetched) displayName=fetched.globalName||fetched.username;
-    }
+    const fetched=member?.user || await client.users.fetch(r.user).catch(()=>null);
+    if(member) displayName=member.displayName||fetched?.globalName||fetched?.username||r.user;
+    else if(fetched) displayName=fetched.globalName||fetched.username||r.user;
+    username=fetched?.username||''; avatarUrl=fetched?.displayAvatarURL?.({extension:'png',size:64})||null;
    } catch {}
-   displayName=String(displayName).replace(/[\r\n]/g,' ').slice(0,28);
-   ctx.fillText(`#${n+1}  ${displayName}  •  ${money(r.coins)}`,79,458+n*20);
+   displayName=String(displayName).replace(/[\r\n]/g,' ').slice(0,30);
+   ctx.fillStyle='#f5f3f7'; ctx.font='700 19px Arial'; ctx.fillText(displayName,230,y+21);
+   ctx.fillStyle='#aaa7b2'; ctx.font='400 13px Arial'; ctx.fillText(username?('@'+username).slice(0,34):'',230,y+38);
+   if(avatarUrl) { try { const av=await loadImage(avatarUrl); ctx.save(); ctx.beginPath(); ctx.arc(185,y+23,17,0,Math.PI*2); ctx.clip(); ctx.drawImage(av,168,y+6,34,34); ctx.restore(); } catch {} }
+   ctx.fillStyle='#f2f0f6'; ctx.font='700 20px Arial'; ctx.textAlign='right'; ctx.fillText(money(r.coins),1405,y+29); ctx.textAlign='left';
   }
+  ctx.fillStyle='#30213e'; ctx.fillRect(62,800,1376,58); ctx.strokeStyle='#8746c5'; ctx.lineWidth=3; ctx.strokeRect(62,800,1376,58);
+  ctx.fillStyle='#c89be8'; ctx.font='700 20px Arial'; ctx.fillText(`YOUR POSITION  #${economyRank(user.id)}`,88,837);
+  ctx.textAlign='right'; ctx.fillText('NEXBITS ECONOMY',1405,837); ctx.textAlign='left';
  } else if(note) {
   box(55,390,1390,135,'Details',note.slice(0,82),'#c9a7ff');
  }
  ctx.fillStyle='#64728f'; ctx.font='500 18px Sans';
- ctx.fillText('Powered By Nexzu Development™ | Designed By Spidyyy',55,610);
+ ctx.fillText('Powered By Nexzu Development™ | Designed By Spidyyy',55,command==='leaderboard'?875:610);
  return canvas.toBuffer('image/png');
 }
 function choose(a,n) {
@@ -805,44 +891,17 @@ function normalizeReactionEmoji(input) {
  return { key: value, reactValue: value };
 }
 
-function parseCustomEmojiInput(input) {
+function resolveServerReactionEmoji(guild, input) {
  const value = String(input || '').trim();
- const match = value.match(/^<(?<animated>a?):(?<name>[A-Za-z0-9_~]+):(?<id>\d+)>$/) || value.match(/^(?<name>[A-Za-z0-9_~]+):(?<id>\d+)$/);
- if (match) return {id:match.groups.id, name:match.groups.name, animated:Boolean(match.groups.animated)};
- if (/^\d{15,22}$/.test(value)) return {id:value, name:null, animated:false};
- return null;
-}
-
-async function resolveServerReactionEmoji(guild, input, {copyExternal=true} = {}) {
- const value = String(input || '').trim();
- const custom = parseCustomEmojiInput(value);
+ const idMatch = value.match(/^<a?:[A-Za-z0-9_~]+:(\d+)>$/) || value.match(/^[A-Za-z0-9_~]+:(\d+)$/) || value.match(/^(\d{15,22})$/);
  const nameMatch = value.match(/^:([A-Za-z0-9_~]+):$/);
  let emoji = null;
- if (custom) emoji = guild?.emojis.cache.get(custom.id) || null;
+ if (idMatch) emoji = guild?.emojis.cache.get(idMatch[1]) || null;
  if (!emoji && nameMatch) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === nameMatch[1].toLowerCase()) || null;
- if (!emoji && !custom && !nameMatch && /^[A-Za-z0-9_~]{2,32}$/.test(value)) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === value.toLowerCase()) || null;
- if (emoji) return {key:emoji.id, reactValue:emoji.toString(), display:emoji.toString(), emoji, copied:false};
-
- // Pasted custom emoji from another server: copy the ORIGINAL custom emoji
- // into this server, then use the newly-created local emoji everywhere.
- if (custom && copyExternal && guild) {
-  const me = guild.members.me || await guild.members.fetchMe().catch(()=>null);
-  if (!me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) return null;
-  const baseName=(custom.name || `emoji_${custom.id}`).slice(0,32).replace(/[^A-Za-z0-9_~]/g,'_') || `emoji_${custom.id}`;
-  const extensions=custom.animated ? ['gif','png'] : ['png','gif'];
-  for (const ext of extensions) {
-   try {
-    const url=`https://cdn.discordapp.com/emojis/${custom.id}.${ext}?quality=lossless`;
-    const copied=await guild.emojis.create({attachment:url,name:baseName,reason:'Nexzu self-role custom emoji copy'});
-    return {key:copied.id,reactValue:copied.toString(),display:copied.toString(),emoji:copied,copied:true};
-   } catch (error) {
-    console.error(`Self-role custom emoji copy (${ext}) failed:`,error?.message||error);
-   }
-  }
-  return null;
- }
- if (custom || nameMatch) return null;
- return {key:value, reactValue:value, display:value, emoji:null, copied:false};
+ if (!emoji && !idMatch && !nameMatch && /^[A-Za-z0-9_~]{2,32}$/.test(value)) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === value.toLowerCase()) || null;
+ if (emoji) return {key:emoji.id, reactValue:emoji.toString(), display:emoji.toString(), emoji};
+ if (idMatch || nameMatch) return null;
+ return {key:value, reactValue:value, display:value, emoji:null};
 }
 
 async function applyReactionRole(reaction, user, addRole) {
@@ -927,13 +986,19 @@ async function handleChatInputCommand(i){
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',flags:MessageFlags.Ephemeral});
    const channel=i.options.getChannel('channel');
+   const chatChannel=i.options.getChannel('chat_channel');
    const message=i.options.getString('message');
+   const defaultMessage='{user} has reached level {level}. GG!\n\n# <a:z9_Levelup:1571762466495668365> Want more levels?\n\n**Stay active in voice channels and join the conversation in {channel}!**';
    if(channel) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_channel', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,channel.id);
+   if(chatChannel) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_chat_channel', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,chatChannel.id);
    if(message) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_message', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,message);
-   if(!channel&&!message) return i.reply({content:'ℹ️ Provide a channel and/or message to update the level-up setup. Use `{user}`, `{level}`, and `{xp}` in the message.',flags:MessageFlags.Ephemeral});
-   return i.reply({content:`✅ Level-up setup updated.${channel?`
-Channel: ${channel}`:''}${message?`
-Message: ${message}`:''}`,flags:MessageFlags.Ephemeral});
+   if(!message) {
+    const existing=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(g.id)?.value;
+    const oldDefault='<a:z9_Levelup:1571762466495668365> {user} has reached level {level}. GG!\n\n**Want more levels?**\nStay active in voice channels and join the conversation in {channel}!';
+    if(!existing || existing===oldDefault) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_message', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,defaultMessage);
+   }
+   if(!channel&&!chatChannel&&!message) return i.reply({content:'ℹ️ Select the level-up announcement channel and/or the channel to mention. The default message matches the requested Level-up style and uses `{user}`, `{level}`, `{xp}`, and `{channel}`.',flags:MessageFlags.Ephemeral});
+   return i.reply({content:`✅ Level-up setup updated.${channel?`\nAnnouncement: ${channel}`:''}${chatChannel?`\nChat channel: ${chatChannel}`:''}${message?`\nMessage: ${message}`:`\nMessage: ${defaultMessage}`}`,flags:MessageFlags.Ephemeral});
   }
   if(c==='levelrole') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Roles permission.',flags:MessageFlags.Ephemeral});
@@ -1648,8 +1713,8 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    for(const role of [role1,role2]) if(!role || role.id===g.id || role.managed || role.position>=botMember.roles.highest.position) return i.reply({content:'⛔ Move my bot role above both selected roles and choose normal, non-managed roles.',flags:MessageFlags.Ephemeral});
    if(role1.id===role2.id) return i.reply({content:'⛔ Please select two different roles.',flags:MessageFlags.Ephemeral});
    if(!target?.isTextBased?.() || !target.send) return i.reply({content:'⛔ I could not use that channel.',flags:MessageFlags.Ephemeral});
-   const e1=await resolveServerReactionEmoji(g,emojiInput1), e2=await resolveServerReactionEmoji(g,emojiInput2);
-   if(!e1 || !e2) return i.reply({content:'⛔ I could not use one of those emojis. For custom emojis, paste the emoji itself, `:emoji_name:`, the emoji ID, or `<:name:id>`. If it is from another server, Nexzu will copy it here automatically and needs **Manage Expressions**.',flags:MessageFlags.Ephemeral});
+   const e1=resolveServerReactionEmoji(g,emojiInput1), e2=resolveServerReactionEmoji(g,emojiInput2);
+   if(!e1 || !e2) return i.reply({content:'⛔ For custom emojis, use the emoji itself, `:emoji_name:`, the emoji ID, or `<:name:id>` from this server.',flags:MessageFlags.Ephemeral});
    if(e1.key===e2.key) return i.reply({content:'⛔ Please select two different emojis.',flags:MessageFlags.Ephemeral});
    const labels={gender:'Gender',age:'Age',relation:'Relation'}, label=labels[type] || 'Roles';
    const embed=chillyStyledEmbed({title:'__React to get your roles__',description:`🎀 **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`,footer:'Nexzu • Self Roles • React to receive your role'});
@@ -1658,7 +1723,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
     await sent.react(e1.reactValue); await sent.react(e2.reactValue);
     const save=db.prepare('INSERT INTO reaction_roles(guild,channel,message,emoji_key,emoji_input,role) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,message,emoji_key) DO UPDATE SET channel=excluded.channel,emoji_input=excluded.emoji_input,role=excluded.role');
     save.run(g.id,sent.channelId,sent.id,e1.key,emojiInput1,role1.id); save.run(g.id,sent.channelId,sent.id,e2.key,emojiInput2,role2.id);
-    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Self-Role Panel Created`,description:`${CHILLY_EMOJI.dot} **Category:** ${label}\n${CHILLY_EMOJI.dot} **Channel:** ${target}\n${CHILLY_EMOJI.dot} **Role 1:** ${role1} → ${e1.display}\n${CHILLY_EMOJI.dot} **Role 2:** ${role2} → ${e2.display}\n\n${e1.copied || e2.copied ? '✨ Custom emojis were copied into this server automatically.\n\n' : ''}Members can react to the panel to receive/remove the selected role.`,footer:'Nexzu • Self Roles'})]});
+    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Self-Role Panel Created`,description:`${CHILLY_EMOJI.dot} **Category:** ${label}\n${CHILLY_EMOJI.dot} **Channel:** ${target}\n${CHILLY_EMOJI.dot} **Role 1:** ${role1} → ${e1.display}\n${CHILLY_EMOJI.dot} **Role 2:** ${role2} → ${e2.display}\n\nMembers can react to the panel to receive/remove the selected role.`,footer:'Nexzu • Self Roles'})]});
    } catch(error) {
     console.error('selfrole failed:',error);
     return i.reply({content:'❌ I could not create the self-role panel. Check **Send Messages**, **Embed Links**, **Add Reactions**, and **Read Message History** permissions.',flags:MessageFlags.Ephemeral}).catch(()=>{});
@@ -1668,7 +1733,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',flags:MessageFlags.Ephemeral});
    const staff=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'giveaway_staff_role')?.value;
    const active=db.prepare('SELECT COUNT(*) AS n FROM giveaways WHERE guild=? AND ended=0').get(g.id).n;
-   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Configuration`,description:`**Officials ! Role:** ${staff?`<@&${staff}>`:'Not set'}
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Configuration`,description:`**Staff Role:** ${staff?`<@&${staff}>`:'Not set'}
 **Active Giveaways:** **${active}**`,footer:'Nexzu • Giveaways'})]});
   }
   if(c==='glist') {
@@ -2092,7 +2157,7 @@ client.on('guildMemberAdd', async member => {
 // Private, bot-owner-only immediate server channel reset. Members and roles are never modified.
 
 function getStaffRole(guild) {
- return guild.roles.cache.find(r => r.name === 'Officials !') || null;
+ return guild.roles.cache.find(r => r.name === '. Officials !?') || null;
 }
 
 function isAuthorisedStaffManager(member) {
@@ -2105,11 +2170,11 @@ function isAuthorisedStaffManager(member) {
 }
 
 async function ensureStaffRole(guild) {
- const role = getStaffRole(guild);
- return role || null;
+ // Use the existing role exactly as named. Never create a new role.
+ return getStaffRole(guild);
 }
 
-async function sendStaffEmbed(channel, {title, description, target, actor, success=true, image=null}) {
+async function sendStaffEmbed(channel, {title, description, target, actor, success=true, banner=false}) {
  const emoji = success ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected;
  const embed = chillyStyledEmbed({
   title: `${emoji} ${title}`,
@@ -2118,9 +2183,11 @@ async function sendStaffEmbed(channel, {title, description, target, actor, succe
  });
  if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
  if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
- if (image) embed.setImage('attachment://Neon Staff Role Assigned Banner.png');
  const payload = {embeds:[embed]};
- if (image) payload.files = [new AttachmentBuilder(image, {name:'Neon Staff Role Assigned Banner.png'})];
+ if (banner && success) {
+  const bannerPath = path.join(__dirname, 'Neon Staff Role Assigned Banner.png');
+  payload.files = [new AttachmentBuilder(bannerPath, {name:'staff-role-assigned.png'})];
+ }
  return channel.send(payload).catch(() => null);
 }
 
@@ -2320,8 +2387,6 @@ async function renderMessageStatsCard({guild, user, totalMessages, todayMessages
 }
 
 client.on('messageCreate', async message => {
- // Load guild config before any reward/anti-spam logic references cfg.
- const cfg = message.guild ? settings(message.guild.id) : {};
  // Prefix command replies use the same branded embed style as slash commands.
  // Existing embed/image replies are preserved by nexzuCommandPayload().
  const _messageReply=message.reply.bind(message);
@@ -2339,7 +2404,7 @@ client.on('messageCreate', async message => {
    if (!isAuthorisedStaffManager(actor)) {
     await sendStaffEmbed(message.channel, {
      title: 'Access Denied',
-     description: `${CHILLY_EMOJI.rejected} You are not authorised to manage the **Officials !** role.\n\n${CHILLY_EMOJI.dot} Only the **server owner**, **bot owner**, **Administrators**, or members with the **Authority** role can use this command.`,
+     description: `${CHILLY_EMOJI.rejected} You are not authorised to manage the **. Officials !?** role.\n\n${CHILLY_EMOJI.dot} Only the **server owner**, **bot owner**, **Administrators**, or members with the **Authority** role can use this command.`,
      actor: message.author,
      success: false
     });
@@ -2370,8 +2435,8 @@ client.on('messageCreate', async message => {
    const staffRole = await ensureStaffRole(message.guild);
    if (!staffRole) {
     await sendStaffEmbed(message.channel, {
-     title: 'Officials Role Unavailable',
-     description: `${CHILLY_EMOJI.rejected} I couldn't find the existing **Officials !** role. No new role will be created.`,
+     title: 'Staff Role Unavailable',
+     description: `${CHILLY_EMOJI.rejected} I couldn't find the existing **. Officials !?** role. No new role will be created. Make sure the role exists and Nexzu has **Manage Roles** permission.`,
      actor: message.author,
      success: false
     });
@@ -2404,7 +2469,7 @@ client.on('messageCreate', async message => {
     if (target.roles.cache.has(staffRole.id)) {
      await sendStaffEmbed(message.channel, {
       title: 'Already Staff',
-      description: `${CHILLY_EMOJI.dot} ${target} is already part of the **Officials !** team.`,
+      description: `${CHILLY_EMOJI.dot} ${target} is already part of the **. Officials !?** team.`,
       target: target,
       actor: message.author,
       success: false
@@ -2414,7 +2479,7 @@ client.on('messageCreate', async message => {
     const added = await target.roles.add(staffRole, `Staff added by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
     if (!added) {
      await sendStaffEmbed(message.channel, {
-      title: 'Officials Role Update Failed',
+      title: 'Staff Update Failed',
       description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role update. Check Nexzu's **Manage Roles** permission and role hierarchy.`,
       target: target,
       actor: message.author,
@@ -2423,18 +2488,18 @@ client.on('messageCreate', async message => {
      return;
     }
     await sendStaffEmbed(message.channel, {
-     title: 'Official Member Added',
-     description: `${CHILLY_EMOJI.success} ${target} has been added to the **Officials !** team successfully.\n\n${CHILLY_EMOJI.crown2} **Officials ! Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
+     title: 'Staff Member Added',
+     description: `${CHILLY_EMOJI.success} ${target} has been added to the **. Officials !?** team successfully.\n\n${CHILLY_EMOJI.crown2} **. Officials !? Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
      target: target,
      actor: message.author,
      success: true,
-     image: path.join(__dirname, 'Neon Staff Role Assigned Banner.png')
+     banner: true
     });
    } else {
     if (!target.roles.cache.has(staffRole.id)) {
      await sendStaffEmbed(message.channel, {
       title: 'Not a Staff Member',
-      description: `${CHILLY_EMOJI.dot} ${target} does not currently have the **Officials !** role.`,
+      description: `${CHILLY_EMOJI.dot} ${target} does not currently have the **. Officials !?** role.`,
       target: target,
       actor: message.author,
       success: false
@@ -2444,7 +2509,7 @@ client.on('messageCreate', async message => {
     const removed = await target.roles.remove(staffRole, `Staff removed by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
     if (!removed) {
      await sendStaffEmbed(message.channel, {
-      title: 'Officials Role Update Failed',
+      title: 'Staff Update Failed',
       description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role removal. Check Nexzu's **Manage Roles** permission and role hierarchy.`,
       target: target,
       actor: message.author,
@@ -2453,12 +2518,12 @@ client.on('messageCreate', async message => {
      return;
     }
     await sendStaffEmbed(message.channel, {
-     title: 'Official Member Removed',
-     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **Officials !** team successfully.\n\n${CHILLY_EMOJI.rejected} **Officials ! Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
+     title: 'Staff Member Removed',
+     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **. Officials !?** team successfully.\n\n${CHILLY_EMOJI.rejected} **. Officials !? Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
      target: target,
      actor: message.author,
      success: true,
-     image: path.join(__dirname, 'Neon Staff Role Assigned Banner.png')
+     banner: true
     });
    }
    return;
@@ -2565,9 +2630,21 @@ Good luck, everyone! ♡***`);
     }
     const channelId=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_channel'").get(message.guild.id)?.value;
     const channel=channelId?await message.guild.channels.fetch(channelId).catch(()=>null):message.channel;
-    const template=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(message.guild.id)?.value || '🎉 {user} reached **Level {level}**!';
-    const content=template.replaceAll('{user}',`<@${message.author.id}>`).replaceAll('{level}',String(after.level)).replaceAll('{xp}',String(total))+rewardText;
-    if(channel?.isTextBased()) await channel.send({content,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+    const template=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(message.guild.id)?.value || '{user} has reached level {level}. GG!\n\n# <a:z9_Levelup:1571762466495668365> Want more levels?\n\n**Stay active in voice channels and join the conversation in {channel}!**';
+    const chatChannelId=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_chat_channel'").get(message.guild.id)?.value;
+    const chatChannel=chatChannelId?await message.guild.channels.fetch(chatChannelId).catch(()=>null):null;
+    const chatMention=chatChannel ? `${chatChannel}` : '#general-chat';
+    const detectedLevel=after.level;
+    const content=template.replaceAll('{user}',`<@${message.author.id}>`).replaceAll('{level}',String(detectedLevel)).replaceAll('{xp}',String(total)).replaceAll('{channel}',chatMention)+rewardText;
+    if(channel?.isTextBased()) {
+     try {
+      const levelCard=await renderLevelUpCard(message.member, before.level, after.level);
+      await channel.send({content,files:[new AttachmentBuilder(levelCard,{name:'level-up.png'})],allowedMentions:{users:[message.author.id]}});
+     } catch(error) {
+      console.error('Level-up card render failed:',error.message);
+      await channel.send({content,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+     }
+    }
    }
   }
  }
@@ -3250,6 +3327,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  }
  // Count ordinary, non-command chat messages for INR rewards.
  // Bots, webhooks, very short messages and bot commands do not earn rewards.
+ const cfg=settings(message.guild.id);
  const rewardText = message.content.trim();
  const rewardSpamKey = `${message.guild.id}:${message.author.id}`;
  const rewardNow = Date.now();
