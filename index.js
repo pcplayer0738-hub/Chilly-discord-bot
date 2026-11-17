@@ -367,8 +367,9 @@ const commands = [
   .addChannelOption(o=>o.setName('channel').setDescription('Log channel').addChannelTypes(ChannelType.GuildText).setRequired(true)),
  new SlashCommandBuilder().setName('levelup-setup').setDescription('Configure level-up announcements for this server')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addChannelOption(o=>o.setName('channel').setDescription('Announcement channel (omit to use the current channel; use off to disable via message option)').addChannelTypes(ChannelType.GuildText).setRequired(false))
-  .addStringOption(o=>o.setName('message').setDescription('Message tags: {user}, {level}, {xp}').setMaxLength(1000).setRequired(false)),
+  .addChannelOption(o=>o.setName('channel').setDescription('Announcement channel (where the level-up is posted)').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addChannelOption(o=>o.setName('chat_channel').setDescription('Channel mentioned in the level-up message').addChannelTypes(ChannelType.GuildText).setRequired(false))
+  .addStringOption(o=>o.setName('message').setDescription('Message tags: {user}, {level}, {xp}, {channel}').setMaxLength(1000).setRequired(false)),
  new SlashCommandBuilder().setName('levelrole').setDescription('Configure level-based role rewards')
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
   .addSubcommand(sub=>sub.setName('add').setDescription('Give a role at a specific level')
@@ -460,6 +461,77 @@ function getLevelRow(guildId,userId) {
  db.prepare('INSERT OR IGNORE INTO leveling_xp(guild,user,xp,last_message) VALUES(?,?,0,0)').run(guildId,userId);
  return db.prepare('SELECT * FROM leveling_xp WHERE guild=? AND user=?').get(guildId,userId);
 }
+
+async function renderLevelUpCard(member, oldLevel, newLevel) {
+  const { createCanvas, loadImage } = require('@napi-rs/canvas');
+  const W=1500, H=650;
+  const canvas=createCanvas(W,H), ctx=canvas.getContext('2d');
+
+  // Arcane-inspired dark level-up card: same overall composition as the supplied reference,
+  // but branded for Nexzu and generated dynamically for every member.
+  ctx.fillStyle='#202327';
+  ctx.fillRect(0,0,W,H);
+
+  const cardX=28, cardY=28, cardW=W-56, cardH=H-56, radius=46;
+  ctx.beginPath();
+  ctx.moveTo(cardX+radius,cardY);
+  ctx.arcTo(cardX+cardW,cardY,cardX+cardW,cardY+cardH,radius);
+  ctx.arcTo(cardX+cardW,cardY+cardH,cardX,cardY+cardH,radius);
+  ctx.arcTo(cardX,cardY+cardH,cardX,cardY,radius);
+  ctx.arcTo(cardX,cardY,cardX+cardW,cardY,radius);
+  ctx.closePath();
+  ctx.fillStyle='#181b1f';
+  ctx.fill();
+
+  // Subtle purple-blue glow.
+  const glow=ctx.createRadialGradient(1110,150,40,1110,150,520);
+  glow.addColorStop(0,'rgba(112,92,255,0.20)');
+  glow.addColorStop(1,'rgba(112,92,255,0)');
+  ctx.fillStyle=glow;
+  ctx.fillRect(cardX,cardY,cardW,cardH);
+
+  const avatarSize=300, avatarX=105, avatarY=175;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(avatarX+avatarSize/2,avatarY+avatarSize/2,avatarSize/2,0,Math.PI*2);
+  ctx.clip();
+  try {
+    const url=member.user.displayAvatarURL({extension:'png',size:512});
+    const avatar=await loadImage(url);
+    ctx.drawImage(avatar,avatarX,avatarY,avatarSize,avatarSize);
+  } catch {
+    ctx.fillStyle='#30343b';
+    ctx.fillRect(avatarX,avatarY,avatarSize,avatarSize);
+  }
+  ctx.restore();
+
+  const name=member.displayName || member.user.globalName || member.user.username;
+  ctx.textBaseline='middle';
+  ctx.font='700 62px Sans';
+  ctx.fillStyle='#ffffff';
+  ctx.fillText('Level-up!',520,205);
+
+  ctx.font='700 72px Sans';
+  const oldText=String(oldLevel), newText=String(newLevel), sep=' • ';
+  const oldW=ctx.measureText(oldText).width, sepW=ctx.measureText(sep).width;
+  ctx.fillStyle='#d8d8df';
+  ctx.fillText(oldText,650,390);
+  ctx.fillStyle='#ffffff';
+  ctx.fillText(sep,650+oldW,390);
+  ctx.fillStyle='#a88cff';
+  ctx.fillText(newText,650+oldW+sepW,390);
+
+  ctx.font='600 28px Sans';
+  ctx.fillStyle='#9ca0a8';
+  const safeName=name.length>28 ? name.slice(0,25)+'...' : name;
+  ctx.fillText(safeName,520,500);
+  ctx.fillStyle='#737782';
+  ctx.font='500 24px Sans';
+  ctx.fillText('Nexzu • Leveling',520,545);
+
+  return canvas.toBuffer('image/png');
+}
+
 function account(g,u) {
  db.prepare('INSERT OR IGNORE INTO global_users(user) VALUES(?)').run(u);
  return db.prepare('SELECT * FROM global_users WHERE user=?').get(u);
@@ -914,13 +986,19 @@ async function handleChatInputCommand(i){
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',flags:MessageFlags.Ephemeral});
    const channel=i.options.getChannel('channel');
+   const chatChannel=i.options.getChannel('chat_channel');
    const message=i.options.getString('message');
+   const defaultMessage='{user} has reached level {level}. GG!\n\n# <a:z9_Levelup:1571762466495668365> Want more levels?\n\n**Stay active in voice channels and join the conversation in {channel}!**';
    if(channel) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_channel', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,channel.id);
+   if(chatChannel) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_chat_channel', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,chatChannel.id);
    if(message) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_message', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,message);
-   if(!channel&&!message) return i.reply({content:'ℹ️ Provide a channel and/or message to update the level-up setup. Use `{user}`, `{level}`, and `{xp}` in the message.',flags:MessageFlags.Ephemeral});
-   return i.reply({content:`✅ Level-up setup updated.${channel?`
-Channel: ${channel}`:''}${message?`
-Message: ${message}`:''}`,flags:MessageFlags.Ephemeral});
+   if(!message) {
+    const existing=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(g.id)?.value;
+    const oldDefault='<a:z9_Levelup:1571762466495668365> {user} has reached level {level}. GG!\n\n**Want more levels?**\nStay active in voice channels and join the conversation in {channel}!';
+    if(!existing || existing===oldDefault) db.prepare("INSERT INTO chilly_config(guild,key,value) VALUES(?, 'levelup_message', ?) ON CONFLICT(guild,key) DO UPDATE SET value=excluded.value").run(g.id,defaultMessage);
+   }
+   if(!channel&&!chatChannel&&!message) return i.reply({content:'ℹ️ Select the level-up announcement channel and/or the channel to mention. The default message matches the requested Level-up style and uses `{user}`, `{level}`, `{xp}`, and `{channel}`.',flags:MessageFlags.Ephemeral});
+   return i.reply({content:`✅ Level-up setup updated.${channel?`\nAnnouncement: ${channel}`:''}${chatChannel?`\nChat channel: ${chatChannel}`:''}${message?`\nMessage: ${message}`:`\nMessage: ${defaultMessage}`}`,flags:MessageFlags.Ephemeral});
   }
   if(c==='levelrole') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Roles permission.',flags:MessageFlags.Ephemeral});
@@ -2553,9 +2631,21 @@ Good luck, everyone! ♡***`);
     }
     const channelId=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_channel'").get(message.guild.id)?.value;
     const channel=channelId?await message.guild.channels.fetch(channelId).catch(()=>null):message.channel;
-    const template=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(message.guild.id)?.value || '🎉 {user} reached **Level {level}**!';
-    const content=template.replaceAll('{user}',`<@${message.author.id}>`).replaceAll('{level}',String(after.level)).replaceAll('{xp}',String(total))+rewardText;
-    if(channel?.isTextBased()) await channel.send({content,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+    const template=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_message'").get(message.guild.id)?.value || '{user} has reached level {level}. GG!\n\n# <a:z9_Levelup:1571762466495668365> Want more levels?\n\n**Stay active in voice channels and join the conversation in {channel}!**';
+    const chatChannelId=db.prepare("SELECT value FROM chilly_config WHERE guild=? AND key='levelup_chat_channel'").get(message.guild.id)?.value;
+    const chatChannel=chatChannelId?await message.guild.channels.fetch(chatChannelId).catch(()=>null):null;
+    const chatMention=chatChannel ? `${chatChannel}` : '#general-chat';
+    const detectedLevel=after.level;
+    const content=template.replaceAll('{user}',`<@${message.author.id}>`).replaceAll('{level}',String(detectedLevel)).replaceAll('{xp}',String(total)).replaceAll('{channel}',chatMention)+rewardText;
+    if(channel?.isTextBased()) {
+     try {
+      const levelCard=await renderLevelUpCard(message.member, before.level, after.level);
+      await channel.send({content,files:[new AttachmentBuilder(levelCard,{name:'level-up.png'})],allowedMentions:{users:[message.author.id]}});
+     } catch(error) {
+      console.error('Level-up card render failed:',error.message);
+      await channel.send({content,allowedMentions:{users:[message.author.id]}}).catch(()=>{});
+     }
+    }
    }
   }
  }
