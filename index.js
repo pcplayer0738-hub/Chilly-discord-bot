@@ -341,6 +341,15 @@ const commands = [
   .addStringOption(o=>o.setName('message_id').setDescription('ID of the embed/message to add the reaction to').setRequired(true))
   .addStringOption(o=>o.setName('emoji').setDescription('Unicode emoji or custom emoji from this server').setRequired(true))
   .addRoleOption(o=>o.setName('role').setDescription('Role to give/remove when reacting').setRequired(true)),
+ new SlashCommandBuilder().setName('selfrole').setDescription('Create a styled self-role reaction panel')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
+  .addStringOption(o=>o.setName('type').setDescription('Self-role category').setRequired(true)
+   .addChoices({name:'Gender',value:'gender'},{name:'Age',value:'age'},{name:'Relation',value:'relation'}))
+  .addRoleOption(o=>o.setName('role1').setDescription('First role to give').setRequired(true))
+  .addRoleOption(o=>o.setName('role2').setDescription('Second role to give').setRequired(true))
+  .addStringOption(o=>o.setName('emoji1').setDescription('Emoji for the first role (server custom emoji or Unicode)').setRequired(true))
+  .addStringOption(o=>o.setName('emoji2').setDescription('Emoji for the second role (server custom emoji or Unicode)').setRequired(true))
+  .addChannelOption(o=>o.setName('channel').setDescription('Channel where the self-role panel should be posted').addChannelTypes(ChannelType.GuildText).setRequired(false)),
  new SlashCommandBuilder().setName('autoreact').setDescription('Manage automatic message reactions')
   .addSubcommand(sub=>sub.setName('add').setDescription('Add an automatic reaction for a trigger')
    .addStringOption(o=>o.setName('trigger').setDescription('Exact word or phrase to match').setMaxLength(100).setRequired(true))
@@ -794,6 +803,43 @@ function normalizeReactionEmoji(input) {
  if (custom) return { key: custom[2], reactValue: `${custom[1]}:${custom[2]}` };
  if (/^\d{15,22}$/.test(value)) return { key: value, reactValue: value };
  return { key: value, reactValue: value };
+}
+
+function parseCustomEmojiInput(input) {
+ const value = String(input || '').trim();
+ const match = value.match(/^<(?<animated>a?):(?<name>[A-Za-z0-9_~]+):(?<id>\d+)>$/) || value.match(/^(?<name>[A-Za-z0-9_~]+):(?<id>\d+)$/);
+ if (match) return {id:match.groups.id, name:match.groups.name, animated:Boolean(match.groups.animated)};
+ if (/^\d{15,22}$/.test(value)) return {id:value, name:null, animated:false};
+ return null;
+}
+
+async function resolveServerReactionEmoji(guild, input, {copyExternal=true} = {}) {
+ const value = String(input || '').trim();
+ const custom = parseCustomEmojiInput(value);
+ const nameMatch = value.match(/^:([A-Za-z0-9_~]+):$/);
+ let emoji = null;
+ if (custom) emoji = guild?.emojis.cache.get(custom.id) || null;
+ if (!emoji && nameMatch) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === nameMatch[1].toLowerCase()) || null;
+ if (!emoji && !custom && !nameMatch && /^[A-Za-z0-9_~]{2,32}$/.test(value)) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === value.toLowerCase()) || null;
+ if (emoji) return {key:emoji.id, reactValue:emoji.toString(), display:emoji.toString(), emoji, copied:false};
+
+ // If a custom emoji was pasted from another server, copy it into this server
+ // so the self-role panel can use the exact custom emoji locally.
+ if (custom && copyExternal && guild) {
+  const me = guild.members.me || await guild.members.fetchMe().catch(()=>null);
+  if (!me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) return null;
+  try {
+   const ext = custom.animated ? 'gif' : 'png';
+   const url = `https://cdn.discordapp.com/emojis/${custom.id}.${ext}?quality=lossless`;
+   const copied = await guild.emojis.create({attachment:url, name:(custom.name || `emoji_${custom.id}`).slice(0,32), reason:'Nexzu self-role custom emoji copy'});
+   return {key:copied.id, reactValue:copied.toString(), display:copied.toString(), emoji:copied, copied:true};
+  } catch (error) {
+   console.error('Self-role custom emoji copy failed:', error?.message || error);
+   return null;
+  }
+ }
+ if (custom || nameMatch) return null;
+ return {key:value, reactValue:value, display:value, emoji:null, copied:false};
 }
 
 async function applyReactionRole(reaction, user, addRole) {
@@ -1586,6 +1632,35 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
     .run(g.id,message.channelId,message.id,emojiKey,emojiInput,role.id);
    return i.editReply(`Reaction role set! React with ${emojiInput} on [this message](https://discord.com/channels/${g.id}/${message.channelId}/${message.id}) to get ${role}. Removing the reaction removes the role. Make sure my bot role is above ${role}.`);
   }
+  if(c==='selfrole') {
+   if(!g) return i.reply({content:'This command can only be used inside a server.',flags:MessageFlags.Ephemeral});
+   if(!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles) && !isGuildOwner && !isTrustedOwner && !i.memberPermissions?.has(PermissionFlagsBits.Administrator))
+    return i.reply({content:'⛔ Manage Roles permission required.',flags:MessageFlags.Ephemeral});
+   const type=i.options.getString('type',true);
+   const role1=i.options.getRole('role1',true), role2=i.options.getRole('role2',true);
+   const emojiInput1=i.options.getString('emoji1',true).trim(), emojiInput2=i.options.getString('emoji2',true).trim();
+   const target=i.options.getChannel('channel') || i.channel;
+   const botMember=g.members.me || await g.members.fetchMe().catch(()=>null);
+   if(!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) return i.reply({content:'⛔ I need **Manage Roles** permission.',flags:MessageFlags.Ephemeral});
+   for(const role of [role1,role2]) if(!role || role.id===g.id || role.managed || role.position>=botMember.roles.highest.position) return i.reply({content:'⛔ Move my bot role above both selected roles and choose normal, non-managed roles.',flags:MessageFlags.Ephemeral});
+   if(role1.id===role2.id) return i.reply({content:'⛔ Please select two different roles.',flags:MessageFlags.Ephemeral});
+   if(!target?.isTextBased?.() || !target.send) return i.reply({content:'⛔ I could not use that channel.',flags:MessageFlags.Ephemeral});
+   const e1=await resolveServerReactionEmoji(g,emojiInput1), e2=await resolveServerReactionEmoji(g,emojiInput2);
+   if(!e1 || !e2) return i.reply({content:'⛔ I could not use one of those emojis. For custom emojis, paste the emoji itself, `:emoji_name:`, the emoji ID, or `<:name:id>`. If it is from another server, Nexzu will copy it here automatically and needs **Manage Expressions**.',flags:MessageFlags.Ephemeral});
+   if(e1.key===e2.key) return i.reply({content:'⛔ Please select two different emojis.',flags:MessageFlags.Ephemeral});
+   const labels={gender:'Gender',age:'Age',relation:'Relation'}, label=labels[type] || 'Roles';
+   const embed=chillyStyledEmbed({title:'__React to get your roles__',description:`🎀 **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`,footer:'Nexzu • Self Roles • React to receive your role'});
+   try {
+    const sent=await target.send({embeds:[embed]});
+    await sent.react(e1.reactValue); await sent.react(e2.reactValue);
+    const save=db.prepare('INSERT INTO reaction_roles(guild,channel,message,emoji_key,emoji_input,role) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,message,emoji_key) DO UPDATE SET channel=excluded.channel,emoji_input=excluded.emoji_input,role=excluded.role');
+    save.run(g.id,sent.channelId,sent.id,e1.key,emojiInput1,role1.id); save.run(g.id,sent.channelId,sent.id,e2.key,emojiInput2,role2.id);
+    return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.success} Self-Role Panel Created`,description:`${CHILLY_EMOJI.dot} **Category:** ${label}\n${CHILLY_EMOJI.dot} **Channel:** ${target}\n${CHILLY_EMOJI.dot} **Role 1:** ${role1} → ${e1.display}\n${CHILLY_EMOJI.dot} **Role 2:** ${role2} → ${e2.display}\n\n${e1.copied || e2.copied ? '✨ Custom emojis were copied into this server automatically.\n\n' : ''}Members can react to the panel to receive/remove the selected role.`,footer:'Nexzu • Self Roles'})]});
+   } catch(error) {
+    console.error('selfrole failed:',error);
+    return i.reply({content:'❌ I could not create the self-role panel. Check **Send Messages**, **Embed Links**, **Add Reactions**, and **Read Message History** permissions.',flags:MessageFlags.Ephemeral}).catch(()=>{});
+   }
+  }
   if(c==='gconfig') {
    if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',flags:MessageFlags.Ephemeral});
    const staff=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'giveaway_staff_role')?.value;
@@ -1860,7 +1935,8 @@ client.on('interactionCreate', async i=>{
      '`/welcome-setup` — Configure server welcome messages.',
      '`/setlogs` — Set the server log channel.',
      '`/role-colour` — Configure a role’s colour.',
-     '`/reaction-role` — Create a reaction-based role.'
+     '`/reaction-role` — Create a reaction-based role.',
+     '`/selfrole` — Create a styled Gender, Age, or Relation self-role panel.'
     ].join('\n')},
     jail:{title:'🔒 Jail Commands',body:[
      '`.jail <member> [reason=No reason provided]` — Jail a member.',
@@ -3172,7 +3248,6 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
  }
  // Count ordinary, non-command chat messages for INR rewards.
  // Bots, webhooks, very short messages and bot commands do not earn rewards.
- const cfg = settings(message.guild.id);
  const rewardText = message.content.trim();
  const rewardSpamKey = `${message.guild.id}:${message.author.id}`;
  const rewardNow = Date.now();
@@ -3195,6 +3270,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   }
  }
 
+ const cfg=settings(message.guild.id);
  if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
   await message.delete().catch(()=>{});
   await message.channel.send({content:`${message.author}, links are disabled in this server.`,allowedMentions:{users:[message.author.id]}}).then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000)).catch(()=>{});
