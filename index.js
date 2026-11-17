@@ -819,24 +819,30 @@ async function resolveServerReactionEmoji(guild, input, {copyExternal=true} = {}
  const nameMatch = value.match(/^:([A-Za-z0-9_~]+):$/);
  let emoji = null;
  if (custom) emoji = guild?.emojis.cache.get(custom.id) || null;
+ // If a copied external emoji already exists locally under the same name,
+ // reuse it instead of creating another duplicate.
+ if (!emoji && custom?.name) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === custom.name.toLowerCase()) || null;
  if (!emoji && nameMatch) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === nameMatch[1].toLowerCase()) || null;
  if (!emoji && !custom && !nameMatch && /^[A-Za-z0-9_~]{2,32}$/.test(value)) emoji = guild?.emojis.cache.find(e => e.name?.toLowerCase() === value.toLowerCase()) || null;
  if (emoji) return {key:emoji.id, reactValue:emoji.toString(), display:emoji.toString(), emoji, copied:false};
 
- // If a custom emoji was pasted from another server, copy it into this server
- // so the self-role panel can use the exact custom emoji locally.
+ // Pasted custom emoji from another server: copy the ORIGINAL custom emoji
+ // into this server, then use the newly-created local emoji everywhere.
  if (custom && copyExternal && guild) {
   const me = guild.members.me || await guild.members.fetchMe().catch(()=>null);
   if (!me?.permissions.has(PermissionFlagsBits.ManageEmojisAndStickers)) return null;
-  try {
-   const ext = custom.animated ? 'gif' : 'png';
-   const url = `https://cdn.discordapp.com/emojis/${custom.id}.${ext}?quality=lossless`;
-   const copied = await guild.emojis.create({attachment:url, name:(custom.name || `emoji_${custom.id}`).slice(0,32), reason:'Nexzu self-role custom emoji copy'});
-   return {key:copied.id, reactValue:copied.toString(), display:copied.toString(), emoji:copied, copied:true};
-  } catch (error) {
-   console.error('Self-role custom emoji copy failed:', error?.message || error);
-   return null;
+  const baseName=(custom.name || `emoji_${custom.id}`).slice(0,32).replace(/[^A-Za-z0-9_~]/g,'_') || `emoji_${custom.id}`;
+  const extensions=custom.animated ? ['gif','png'] : ['png','gif'];
+  for (const ext of extensions) {
+   try {
+    const url=`https://cdn.discordapp.com/emojis/${custom.id}.${ext}?quality=lossless`;
+    const copied=await guild.emojis.create({attachment:url,name:baseName,reason:'Nexzu self-role custom emoji copy'});
+    return {key:copied.id,reactValue:copied.toString(),display:copied.toString(),emoji:copied,copied:true};
+   } catch (error) {
+    console.error(`Self-role custom emoji copy (${ext}) failed:`,error?.message||error);
+   }
   }
+  return null;
  }
  if (custom || nameMatch) return null;
  return {key:value, reactValue:value, display:value, emoji:null, copied:false};
@@ -1649,7 +1655,14 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    if(!e1 || !e2) return i.reply({content:'⛔ I could not use one of those emojis. For custom emojis, paste the emoji itself, `:emoji_name:`, the emoji ID, or `<:name:id>`. If it is from another server, Nexzu will copy it here automatically and needs **Manage Expressions**.',flags:MessageFlags.Ephemeral});
    if(e1.key===e2.key) return i.reply({content:'⛔ Please select two different emojis.',flags:MessageFlags.Ephemeral});
    const labels={gender:'Gender',age:'Age',relation:'Relation'}, label=labels[type] || 'Roles';
-   const embed=chillyStyledEmbed({title:'__React to get your roles__',description:`🎀 **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`,footer:'Nexzu • Self Roles • React to receive your role'});
+   // Screenshot-matching header emoji. If it is not in this server yet, copy it automatically.
+   const headerEmoji=await resolveServerReactionEmoji(g,'<a:girl_owner:1572106718064676944>');
+   const headerDisplay=headerEmoji?.display || '🎀';
+   const embed=new EmbedBuilder()
+    .setColor(0x363640)
+    .setTitle('__React to get your roles__')
+    .setDescription(`${headerDisplay} **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`);
+
    try {
     const sent=await target.send({embeds:[embed]});
     await sent.react(e1.reactValue); await sent.react(e2.reactValue);
