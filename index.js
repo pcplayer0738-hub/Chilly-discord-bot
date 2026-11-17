@@ -1668,7 +1668,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    if(!hasAdminAccess) return i.reply({content:'⛔ Manage Server permission required.',flags:MessageFlags.Ephemeral});
    const staff=db.prepare('SELECT value FROM chilly_config WHERE guild=? AND key=?').get(g.id,'giveaway_staff_role')?.value;
    const active=db.prepare('SELECT COUNT(*) AS n FROM giveaways WHERE guild=? AND ended=0').get(g.id).n;
-   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Configuration`,description:`**Officials Role:** ${staff?`<@&${staff}>`:'Not set'}
+   return i.reply({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.gift} Giveaway Configuration`,description:`**Officials ! Role:** ${staff?`<@&${staff}>`:'Not set'}
 **Active Giveaways:** **${active}**`,footer:'Nexzu • Giveaways'})]});
   }
   if(c==='glist') {
@@ -2105,40 +2105,11 @@ function isAuthorisedStaffManager(member) {
 }
 
 async function ensureStaffRole(guild) {
- return getStaffRole(guild);
+ const role = getStaffRole(guild);
+ return role || null;
 }
 
-async function renderStaffCard({guild, target, actor, action}) {
- const { createCanvas, loadImage } = require('@napi-rs/canvas');
- const canvas=createCanvas(1500,650), ctx=canvas.getContext('2d');
- const bg=ctx.createLinearGradient(0,0,1500,650); bg.addColorStop(0,'#0b1020'); bg.addColorStop(.55,'#171d31'); bg.addColorStop(1,'#080d18');
- ctx.fillStyle=bg; ctx.fillRect(0,0,1500,650);
- ctx.fillStyle=action==='add'?'#75e0a6':'#ff6b7a'; ctx.fillRect(0,0,1500,9);
- ctx.globalAlpha=.12; ctx.fillStyle=action==='add'?'#75e0a6':'#ff6b7a'; ctx.beginPath(); ctx.arc(1370,90,220,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
- const rr=(x,y,w,h,r,fill,stroke)=>{ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}};
- const txt=(t,x,y,size,color,weight='600',align='left')=>{ctx.fillStyle=color;ctx.font=`${weight} ${size}px Sans`;ctx.textAlign=align;ctx.fillText(String(t),x,y);ctx.textAlign='left';};
- try { const avatar=await loadImage(target.user.displayAvatarURL({extension:'png',size:256})); ctx.save();ctx.beginPath();ctx.arc(112,118,66,0,Math.PI*2);ctx.clip();ctx.drawImage(avatar,46,52,132,132);ctx.restore();ctx.strokeStyle=action==='add'?'#75e0a6':'#ff6b7a';ctx.lineWidth=4;ctx.beginPath();ctx.arc(112,118,68,0,Math.PI*2);ctx.stroke(); } catch {}
- txt(action==='add'?'OFFICIALS ACCESS GRANTED':'OFFICIALS ACCESS REMOVED',215,88,34,'#f7f5ff','700');
- txt(target.displayName || target.user.username,215,130,28,'#f7f5ff','700');
- txt('@'+String(target.user.username).slice(0,30),215,165,20,'#aeb4c8','500');
- txt(guild.name,215,198,19,'#7f879d','500');
- rr(55,245,1390,210,24,'#171d31','#313b58');
- txt(action==='add'?'Officials ! role assigned':'Officials ! role removed',95,305,32,action==='add'?'#75e0a6':'#ff8793','700');
- txt(action==='add'?'The member is now an official staff member.':'The member no longer has Officials access.',95,350,22,'#c6cada','500');
- txt('ROLE',95,405,18,'#7f879d','700'); txt('Officials !',95,432,25,'#f1eef7','700');
- txt('AUTHORISED BY',820,405,18,'#7f879d','700'); txt('@'+String(actor.user.username).slice(0,28),820,432,25,'#f1eef7','700');
- txt('NEXZU • STAFF MANAGEMENT',750,585,18,'#9a83b8','600','center');
- return canvas.toBuffer('image/png');
-}
-
-async function sendStaffCard(channel, data) {
- try {
-  const buffer=await renderStaffCard(data);
-  return channel.send({files:[new AttachmentBuilder(buffer,{name:`officials-${data.action}-${data.target.id}.png`})]});
- } catch (e) { console.error('Officials card render:', e.message); return null; }
-}
-
-async function sendStaffEmbed(channel, {title, description, target, actor, success=true}) {
+async function sendStaffEmbed(channel, {title, description, target, actor, success=true, image=null}) {
  const emoji = success ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected;
  const embed = chillyStyledEmbed({
   title: `${emoji} ${title}`,
@@ -2147,7 +2118,10 @@ async function sendStaffEmbed(channel, {title, description, target, actor, succe
  });
  if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
  if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
- return channel.send({embeds:[embed]}).catch(() => null);
+ if (image) embed.setImage('attachment://Neon Staff Role Assigned Banner.png');
+ const payload = {embeds:[embed]};
+ if (image) payload.files = [new AttachmentBuilder(image, {name:'Neon Staff Role Assigned Banner.png'})];
+ return channel.send(payload).catch(() => null);
 }
 
 // Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
@@ -2346,6 +2320,8 @@ async function renderMessageStatsCard({guild, user, totalMessages, todayMessages
 }
 
 client.on('messageCreate', async message => {
+ // Load guild config before any reward/anti-spam logic references cfg.
+ const cfg = message.guild ? settings(message.guild.id) : {};
  // Prefix command replies use the same branded embed style as slash commands.
  // Existing embed/image replies are preserved by nexzuCommandPayload().
  const _messageReply=message.reply.bind(message);
@@ -2394,8 +2370,8 @@ client.on('messageCreate', async message => {
    const staffRole = await ensureStaffRole(message.guild);
    if (!staffRole) {
     await sendStaffEmbed(message.channel, {
-     title: 'Staff Role Unavailable',
-     description: `${CHILLY_EMOJI.rejected} I couldn't access or create the **Officials !** role. Make sure Nexzu has **Manage Roles** permission.`,
+     title: 'Officials Role Unavailable',
+     description: `${CHILLY_EMOJI.rejected} I couldn't find the existing **Officials !** role. No new role will be created.`,
      actor: message.author,
      success: false
     });
@@ -2438,7 +2414,7 @@ client.on('messageCreate', async message => {
     const added = await target.roles.add(staffRole, `Staff added by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
     if (!added) {
      await sendStaffEmbed(message.channel, {
-      title: 'Staff Update Failed',
+      title: 'Officials Role Update Failed',
       description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role update. Check Nexzu's **Manage Roles** permission and role hierarchy.`,
       target: target,
       actor: message.author,
@@ -2446,13 +2422,13 @@ client.on('messageCreate', async message => {
      });
      return;
     }
-    await sendStaffCard(message.channel, {guild:message.guild, target, actor:message.member, action:'add'});
     await sendStaffEmbed(message.channel, {
-     title: 'Officials Member Added',
-     description: `${CHILLY_EMOJI.success} ${target} has been added to the **Officials !** team successfully.\n\n${CHILLY_EMOJI.crown2} **Officials Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
+     title: 'Official Member Added',
+     description: `${CHILLY_EMOJI.success} ${target} has been added to the **Officials !** team successfully.\n\n${CHILLY_EMOJI.crown2} **Officials ! Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
      target: target,
      actor: message.author,
-     success: true
+     success: true,
+     image: path.join(__dirname, 'Neon Staff Role Assigned Banner.png')
     });
    } else {
     if (!target.roles.cache.has(staffRole.id)) {
@@ -2468,7 +2444,7 @@ client.on('messageCreate', async message => {
     const removed = await target.roles.remove(staffRole, `Staff removed by ${message.author.tag} (${message.author.id})`).then(() => true).catch(() => false);
     if (!removed) {
      await sendStaffEmbed(message.channel, {
-      title: 'Staff Update Failed',
+      title: 'Officials Role Update Failed',
       description: `${CHILLY_EMOJI.rejected} Discord rejected the Staff role removal. Check Nexzu's **Manage Roles** permission and role hierarchy.`,
       target: target,
       actor: message.author,
@@ -2476,13 +2452,13 @@ client.on('messageCreate', async message => {
      });
      return;
     }
-    await sendStaffCard(message.channel, {guild:message.guild, target, actor:message.member, action:'remove'});
     await sendStaffEmbed(message.channel, {
-     title: 'Officials Member Removed',
-     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **Officials !** team successfully.\n\n${CHILLY_EMOJI.rejected} **Officials Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Officials-only access provided by this role has been revoked.`,
+     title: 'Official Member Removed',
+     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **Officials !** team successfully.\n\n${CHILLY_EMOJI.rejected} **Officials ! Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
      target: target,
      actor: message.author,
-     success: true
+     success: true,
+     image: path.join(__dirname, 'Neon Staff Role Assigned Banner.png')
     });
    }
    return;
@@ -3296,7 +3272,6 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   }
  }
 
- const cfg=settings(message.guild.id);
  if(cfg.antilink && linkPattern.test(message.content) && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
   await message.delete().catch(()=>{});
   await message.channel.send({content:`${message.author}, links are disabled in this server.`,allowedMentions:{users:[message.author.id]}}).then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000)).catch(()=>{});
