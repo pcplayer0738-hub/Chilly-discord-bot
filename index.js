@@ -2157,7 +2157,9 @@ client.on('guildMemberAdd', async member => {
 // Private, bot-owner-only immediate server channel reset. Members and roles are never modified.
 
 function getStaffRole(guild) {
- return guild.roles.cache.find(r => r.name === '. Officials !?') || null;
+ const exact = '. Officials !?';
+ const normalize = name => String(name || '').replace(/\s+/g, ' ').trim();
+ return guild.roles.cache.find(r => r.name === exact || normalize(r.name) === exact) || null;
 }
 
 function isAuthorisedStaffManager(member) {
@@ -2170,25 +2172,106 @@ function isAuthorisedStaffManager(member) {
 }
 
 async function ensureStaffRole(guild) {
- // Use the existing role exactly as named. Never create a new role.
+ // Refresh the role cache first, then use ONLY the existing `. Officials !?` role.
+ await guild.roles.fetch().catch(() => null);
  return getStaffRole(guild);
 }
 
-async function sendStaffEmbed(channel, {title, description, target, actor, success=true, banner=false}) {
+function resolveStaffEmojiText(text, guild) {
+ if (!text) return text;
+ const fallbacks = {
+  '1571576533628318633': '❌',
+  '1571576535972839504': '✅',
+  '1571576512547782718': '•',
+  '1571576480946688539': '👤',
+  '1571576478452285621': '🛡️',
+  '1571576540460752937': '💰'
+ };
+ return String(text).replace(/<a?:[^:>]+:(\d+)>/g, (full, id) => {
+  const emoji = guild?.emojis?.cache?.get(id);
+  if (emoji) return emoji.toString();
+  return fallbacks[id] || '•';
+ });
+}
+
+async function renderStaffBanner(member, action='add', roleName='. Officials !?') {
+ const { createCanvas, loadImage } = require('@napi-rs/canvas');
+ const templatePath = path.join(__dirname, 'Neon Staff Role Assigned Banner.png');
+ const base = await loadImage(templatePath);
+ const canvas = createCanvas(base.width, base.height);
+ const ctx = canvas.getContext('2d');
+ ctx.drawImage(base, 0, 0);
+
+ // Cover the template's old static member/title text so the banner is actually personalized.
+ ctx.fillStyle = 'rgba(7, 5, 16, 0.93)';
+ ctx.fillRect(70, 300, 1140, 270);
+ ctx.fillStyle = 'rgba(7, 5, 16, 0.96)';
+ ctx.fillRect(70, 575, 1140, 350);
+
+ const added = action === 'add';
+ ctx.textAlign = 'center';
+ ctx.fillStyle = '#f7f3ff';
+ ctx.font = '900 62px Sans';
+ ctx.fillText(added ? 'STAFF ROLE ASSIGNED!' : 'STAFF ROLE REMOVED!', 640, 385);
+
+ let avatar;
+ try {
+  avatar = await loadImage(member.displayAvatarURL({extension:'png', size:256}));
+ } catch {}
+ if (avatar) {
+  ctx.save();
+  ctx.beginPath(); ctx.arc(205, 690, 105, 0, Math.PI*2); ctx.clip();
+  ctx.drawImage(avatar, 100, 585, 210, 210);
+  ctx.restore();
+  ctx.strokeStyle = '#9b4dff'; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.arc(205, 690, 109, 0, Math.PI*2); ctx.stroke();
+ }
+
+ ctx.textAlign = 'left';
+ ctx.fillStyle = '#ffffff';
+ ctx.font = '800 46px Sans';
+ const displayName = String(member.displayName || member.user.username).slice(0, 24);
+ ctx.fillText(`@${displayName}`, 360, 675);
+ ctx.fillStyle = '#ddd6ec';
+ ctx.font = '500 34px Sans';
+ ctx.fillText(added ? 'has been given the role' : 'has been removed from the role', 360, 730);
+ ctx.fillStyle = '#b86cff';
+ ctx.font = '800 40px Sans';
+ ctx.fillText(roleName, 360, 795);
+ ctx.fillStyle = '#cfc7df';
+ ctx.font = '500 28px Sans';
+ ctx.fillText(added ? 'Staff access has been granted.' : 'Staff access has been revoked.', 360, 845);
+
+ ctx.textAlign = 'center';
+ ctx.fillStyle = '#eee8f8';
+ ctx.font = '600 30px Sans';
+ ctx.fillText(added ? 'Use .remove staff @user to remove the role.' : 'Use .staff @user to assign the role again.', 640, 905);
+ return canvas.toBuffer('image/png');
+}
+
+async function sendStaffEmbed(channel, {title, description, target, actor, success=true, banner=false, action='add'}) {
+ const guild = channel?.guild;
  const emoji = success ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected;
+ const safeTitle = resolveStaffEmojiText(`${emoji} ${title}`, guild);
+ const safeDescription = resolveStaffEmojiText(description, guild);
  const embed = chillyStyledEmbed({
-  title: `${emoji} ${title}`,
-  description,
+  title: safeTitle,
+  description: safeDescription,
   footer: 'Nexzu • Staff Management'
  });
- if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
- if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
+ if (target) embed.addFields({name:`${resolveStaffEmojiText(CHILLY_EMOJI.member, guild)} Member`,value:`${target} \`${target.id}\``,inline:true});
+ if (actor) embed.addFields({name:`${resolveStaffEmojiText(CHILLY_EMOJI.moderator, guild)} Authorised By`,value:`${actor}`,inline:true});
  const payload = {embeds:[embed]};
- if (banner && success) {
-  const bannerPath = path.join(__dirname, 'Neon Staff Role Assigned Banner.png');
-  payload.files = [new AttachmentBuilder(bannerPath, {name:'staff-role-assigned.png'})];
+ if (banner && success && target) {
+  try {
+   const bannerBuffer = await renderStaffBanner(target, action, '. Officials !?');
+   payload.files = [new AttachmentBuilder(bannerBuffer, {name:'staff-role-banner.png'})];
+   embed.setImage('attachment://staff-role-banner.png');
+  } catch (error) {
+   console.error('Staff banner render failed:', error.message);
+  }
  }
- return channel.send(payload).catch(() => null);
+ return channel.send(payload).catch(error => { console.error('Staff message send failed:', error.message); return null; });
 }
 
 // Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
@@ -2493,7 +2576,8 @@ client.on('messageCreate', async message => {
      target: target,
      actor: message.author,
      success: true,
-     banner: true
+     banner: true,
+     action: 'add'
     });
    } else {
     if (!target.roles.cache.has(staffRole.id)) {
@@ -2523,7 +2607,8 @@ client.on('messageCreate', async message => {
      target: target,
      actor: message.author,
      success: true,
-     banner: true
+     banner: true,
+     action: 'remove'
     });
    }
    return;
