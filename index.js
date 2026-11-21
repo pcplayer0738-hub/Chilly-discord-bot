@@ -2157,9 +2157,7 @@ client.on('guildMemberAdd', async member => {
 // Private, bot-owner-only immediate server channel reset. Members and roles are never modified.
 
 function getStaffRole(guild) {
- const exact = '. Officials !?';
- const normalize = name => String(name || '').replace(/\s+/g, ' ').trim();
- return guild.roles.cache.find(r => r.name === exact || normalize(r.name) === exact) || null;
+ return guild.roles.cache.find(r => r.name === 'Staff ✦' || r.name === 'Staff') || null;
 }
 
 function isAuthorisedStaffManager(member) {
@@ -2172,106 +2170,28 @@ function isAuthorisedStaffManager(member) {
 }
 
 async function ensureStaffRole(guild) {
- // Refresh the role cache first, then use ONLY the existing `. Officials !?` role.
- await guild.roles.fetch().catch(() => null);
- return getStaffRole(guild);
+ let role = getStaffRole(guild);
+ if (role) return role;
+ const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+ if (!me?.permissions.has(PermissionFlagsBits.ManageRoles)) return null;
+ role = await guild.roles.create({
+  name: 'Staff ✦',
+  color: '#99AAB5',
+  reason: 'Create Nexzu Staff role for authorised staff management'
+ }).catch(() => null);
+ return role;
 }
 
-function resolveStaffEmojiText(text, guild) {
- if (!text) return text;
- const fallbacks = {
-  '1571576533628318633': '❌',
-  '1571576535972839504': '✅',
-  '1571576512547782718': '•',
-  '1571576480946688539': '👤',
-  '1571576478452285621': '🛡️',
-  '1571576540460752937': '💰'
- };
- return String(text).replace(/<a?:[^:>]+:(\d+)>/g, (full, id) => {
-  const emoji = guild?.emojis?.cache?.get(id);
-  if (emoji) return emoji.toString();
-  return fallbacks[id] || '•';
- });
-}
-
-async function renderStaffBanner(member, action='add', roleName='. Officials !?') {
- const { createCanvas, loadImage } = require('@napi-rs/canvas');
- const templatePath = path.join(__dirname, 'Neon Staff Role Assigned Banner.png');
- const base = await loadImage(templatePath);
- const canvas = createCanvas(base.width, base.height);
- const ctx = canvas.getContext('2d');
- ctx.drawImage(base, 0, 0);
-
- // Cover the template's old static member/title text so the banner is actually personalized.
- ctx.fillStyle = 'rgba(7, 5, 16, 0.93)';
- ctx.fillRect(70, 300, 1140, 270);
- ctx.fillStyle = 'rgba(7, 5, 16, 0.96)';
- ctx.fillRect(70, 575, 1140, 350);
-
- const added = action === 'add';
- ctx.textAlign = 'center';
- ctx.fillStyle = '#f7f3ff';
- ctx.font = '900 62px Sans';
- ctx.fillText(added ? 'STAFF ROLE ASSIGNED!' : 'STAFF ROLE REMOVED!', 640, 385);
-
- let avatar;
- try {
-  avatar = await loadImage(member.displayAvatarURL({extension:'png', size:256}));
- } catch {}
- if (avatar) {
-  ctx.save();
-  ctx.beginPath(); ctx.arc(205, 690, 105, 0, Math.PI*2); ctx.clip();
-  ctx.drawImage(avatar, 100, 585, 210, 210);
-  ctx.restore();
-  ctx.strokeStyle = '#9b4dff'; ctx.lineWidth = 8;
-  ctx.beginPath(); ctx.arc(205, 690, 109, 0, Math.PI*2); ctx.stroke();
- }
-
- ctx.textAlign = 'left';
- ctx.fillStyle = '#ffffff';
- ctx.font = '800 46px Sans';
- const displayName = String(member.displayName || member.user.username).slice(0, 24);
- ctx.fillText(`@${displayName}`, 360, 675);
- ctx.fillStyle = '#ddd6ec';
- ctx.font = '500 34px Sans';
- ctx.fillText(added ? 'has been given the role' : 'has been removed from the role', 360, 730);
- ctx.fillStyle = '#b86cff';
- ctx.font = '800 40px Sans';
- ctx.fillText(roleName, 360, 795);
- ctx.fillStyle = '#cfc7df';
- ctx.font = '500 28px Sans';
- ctx.fillText(added ? 'Staff access has been granted.' : 'Staff access has been revoked.', 360, 845);
-
- ctx.textAlign = 'center';
- ctx.fillStyle = '#eee8f8';
- ctx.font = '600 30px Sans';
- ctx.fillText(added ? 'Use .remove staff @user to remove the role.' : 'Use .staff @user to assign the role again.', 640, 905);
- return canvas.toBuffer('image/png');
-}
-
-async function sendStaffEmbed(channel, {title, description, target, actor, success=true, banner=false, action='add'}) {
- const guild = channel?.guild;
+async function sendStaffEmbed(channel, {title, description, target, actor, success=true}) {
  const emoji = success ? CHILLY_EMOJI.success : CHILLY_EMOJI.rejected;
- const safeTitle = resolveStaffEmojiText(`${emoji} ${title}`, guild);
- const safeDescription = resolveStaffEmojiText(description, guild);
  const embed = chillyStyledEmbed({
-  title: safeTitle,
-  description: safeDescription,
+  title: `${emoji} ${title}`,
+  description,
   footer: 'Nexzu • Staff Management'
  });
- if (target) embed.addFields({name:`${resolveStaffEmojiText(CHILLY_EMOJI.member, guild)} Member`,value:`${target} \`${target.id}\``,inline:true});
- if (actor) embed.addFields({name:`${resolveStaffEmojiText(CHILLY_EMOJI.moderator, guild)} Authorised By`,value:`${actor}`,inline:true});
- const payload = {embeds:[embed]};
- if (banner && success && target) {
-  try {
-   const bannerBuffer = await renderStaffBanner(target, action, '. Officials !?');
-   payload.files = [new AttachmentBuilder(bannerBuffer, {name:'staff-role-banner.png'})];
-   embed.setImage('attachment://staff-role-banner.png');
-  } catch (error) {
-   console.error('Staff banner render failed:', error.message);
-  }
- }
- return channel.send(payload).catch(error => { console.error('Staff message send failed:', error.message); return null; });
+ if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
+ if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
+ return channel.send({embeds:[embed]}).catch(() => null);
 }
 
 // Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
@@ -2487,7 +2407,7 @@ client.on('messageCreate', async message => {
    if (!isAuthorisedStaffManager(actor)) {
     await sendStaffEmbed(message.channel, {
      title: 'Access Denied',
-     description: `${CHILLY_EMOJI.rejected} You are not authorised to manage the **. Officials !?** role.\n\n${CHILLY_EMOJI.dot} Only the **server owner**, **bot owner**, **Administrators**, or members with the **Authority** role can use this command.`,
+     description: `${CHILLY_EMOJI.rejected} You are not authorised to manage the **Staff** role.\n\n${CHILLY_EMOJI.dot} Only the **server owner**, **bot owner**, **Administrators**, or members with the **Authority** role can use this command.`,
      actor: message.author,
      success: false
     });
@@ -2519,7 +2439,7 @@ client.on('messageCreate', async message => {
    if (!staffRole) {
     await sendStaffEmbed(message.channel, {
      title: 'Staff Role Unavailable',
-     description: `${CHILLY_EMOJI.rejected} I couldn't find the existing **. Officials !?** role. No new role will be created. Make sure the role exists and Nexzu has **Manage Roles** permission.`,
+     description: `${CHILLY_EMOJI.rejected} I couldn't access or create the **Staff ✦** role. Make sure Nexzu has **Manage Roles** permission.`,
      actor: message.author,
      success: false
     });
@@ -2552,7 +2472,7 @@ client.on('messageCreate', async message => {
     if (target.roles.cache.has(staffRole.id)) {
      await sendStaffEmbed(message.channel, {
       title: 'Already Staff',
-      description: `${CHILLY_EMOJI.dot} ${target} is already part of the **. Officials !?** team.`,
+      description: `${CHILLY_EMOJI.dot} ${target} is already part of the **Staff** team.`,
       target: target,
       actor: message.author,
       success: false
@@ -2572,18 +2492,16 @@ client.on('messageCreate', async message => {
     }
     await sendStaffEmbed(message.channel, {
      title: 'Staff Member Added',
-     description: `${CHILLY_EMOJI.success} ${target} has been added to the **. Officials !?** team successfully.\n\n${CHILLY_EMOJI.crown2} **. Officials !? Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
+     description: `${CHILLY_EMOJI.success} ${target} has been added to the **Staff** team successfully.\n\n${CHILLY_EMOJI.crown2} **Staff Role:** ${staffRole}\n${CHILLY_EMOJI.dot} The member can now access staff areas protected by this role.`,
      target: target,
      actor: message.author,
-     success: true,
-     banner: true,
-     action: 'add'
+     success: true
     });
    } else {
     if (!target.roles.cache.has(staffRole.id)) {
      await sendStaffEmbed(message.channel, {
       title: 'Not a Staff Member',
-      description: `${CHILLY_EMOJI.dot} ${target} does not currently have the **. Officials !?** role.`,
+      description: `${CHILLY_EMOJI.dot} ${target} does not currently have the **Staff** role.`,
       target: target,
       actor: message.author,
       success: false
@@ -2603,12 +2521,10 @@ client.on('messageCreate', async message => {
     }
     await sendStaffEmbed(message.channel, {
      title: 'Staff Member Removed',
-     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **. Officials !?** team successfully.\n\n${CHILLY_EMOJI.rejected} **. Officials !? Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
+     description: `${CHILLY_EMOJI.success} ${target} has been removed from the **Staff** team successfully.\n\n${CHILLY_EMOJI.rejected} **Staff Role:** ${staffRole}\n${CHILLY_EMOJI.dot} Staff-only access provided by this role has been revoked.`,
      target: target,
      actor: message.author,
-     success: true,
-     banner: true,
-     action: 'remove'
+     success: true
     });
    }
    return;
@@ -2764,6 +2680,82 @@ Good luck, everyone! ♡***`);
   const everyone=message.guild.roles.everyone;
   try { await message.channel.permissionOverwrites.edit(everyone, {ViewChannel:rawPrefix==='.unhide'?true:false}); return message.reply(rawPrefix==='.hide'?'🙈 Channel hidden from @everyone.':'👀 Channel visible to @everyone again.'); }
   catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
+ }
+
+ // Secret .pookie: owner-only screenshot-style Pookie server builder.
+ if (message.content.trim().toLowerCase() === '.pookie') {
+  if (message.author.id !== TRUSTED_OWNER_ID) return;
+  const guild = message.guild;
+  if (!guild) return;
+
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels) ||
+      !botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) {
+   return message.reply('❌ Nexzu needs **Manage Channels** and **Manage Roles** permissions.').catch(() => {});
+  }
+
+  // Names/symbols below are transcribed from the supplied Pookie screenshots.
+  // Discord custom emoji IDs are not present in screenshots, so visible Unicode symbols are preserved.
+  const roleSpecs = [
+   ['ε・ ArchAngel 〜',' #D9DDE1'], ['ε 3・Divine Overseer,',' #D9DDE1'], ['ε 3・Guardian,',' #D9DDE1'],
+   ['ε red 3・✧',' #F3B6B6'], ['ε orange 3・✧',' #F3D0B6'], ['ε yellow 3・✧',' #E8DDAE'],
+   ['ε green 3・✧',' #C5D9C0'], ['ε blue 3・✧',' #BFD4E5'], ['ε purple 3・✧',' #D3C1DD'],
+   ['ε pink 3・✧',' #E6C1D2'], ['♡・VIP・♡',' #D9DDE1'], ['♡・Sub・♡',' #D9DDE1'],
+   ['/◇・artist ʚ',' #D9DDE1'], ['/◇・writer ʚ',' #D9DDE1'], ['/◇・gamer ʚ',' #D9DDE1'], ['/◇・crafter ʚ',' #D9DDE1'],
+   ['☆ owner ☆',' #D9DDE1'], ['◎ admin☆',' #D9DDE1'], ['✂・mod・☆',' #D9DDE1'], ['☆ vip・✦',' #D9DDE1'],
+   ['//・member 🫧',' #D9DDE1'], ['╱╲・musician・🎹',' #D9DDE1'], ['╱╲・gamer・🎧',' #D9DDE1'],
+   ['╱╲・writer・🏠',' #D9DDE1'], ['╱╲・artist・☁️',' #D9DDE1'], ['-・☆・-18',' #D9DDE1'], ['18+・☆',' #D9DDE1'],
+   ['☆ bots ☆',' #D9DDE1'], ['╱・:PC・',' #D9DDE1'], ['╱・:Xbox',' #D9DDE1'], ['╱・:Mobile',' #D9DDE1'],
+   ['╱・:PlayStation',' #D9DDE1'], ['╱・:Nintendo Switch',' #D9DDE1']
+  ];
+
+  const categories = [
+   { name:'・୨ angels landing ・⌒', channels:[
+    ['୨, welc`',ChannelType.GuildText], ['〰・rules! ʚ',ChannelType.GuildText], ['・🪽・verify・⌒',ChannelType.GuildText]
+   ]},
+   { name:'♡・for you・⌒', channels:[
+    ['୨・intro🦢',ChannelType.GuildText], ['୨・roles・ʚ',ChannelType.GuildText], ['⌒annc・ʚ',ChannelType.GuildText]
+   ]},
+   { name:'୨・chat・⌒', channels:[
+    ['୨・general・🪽',ChannelType.GuildText], ['ω・media!・ʚ',ChannelType.GuildText], ['♥・advice・♡',ChannelType.GuildText], ['〰・gaming・♡',ChannelType.GuildText], ['♧, memes! `',ChannelType.GuildText]
+   ]},
+   { name:'・୨ angels voice・⌒', channels:[['mute_M',ChannelType.GuildText]], voices:[['〰・general・⌒'],['〰・chill・♥'],['〰・study・ʚ'],['〰・music・🦢'],['〰・gaming!・ʚ'],['〰・afk/idle・zZ ʅ']]},
+   { name:'୨・001⌄', channels:[
+    ['//・🏠 welc・#・',ChannelType.GuildText], ['・→・`rules・🛒',ChannelType.GuildText], ['✂・× intro・🎹',ChannelType.GuildText], ['🎧・✧・annc・≋',ChannelType.GuildText]
+   ]},
+   { name:'୨・002⌄', channels:[
+    ['🎹・general・#',ChannelType.GuildText], ['↻・gaming・▦',ChannelType.GuildText], ['🛒・memes・🏠',ChannelType.GuildText], ['☆・🐼・pets・≋',ChannelType.GuildText], ['##・advice・🌀',ChannelType.GuildText], ['//・☁️・cmnds・▧',ChannelType.GuildText]
+   ]}
+  ];
+
+  let rolesCreated=0, categoriesCreated=0, channelsCreated=0, skipped=0;
+  const roleMap=new Map();
+  try {
+   for (const [name,color] of roleSpecs) {
+    let role=guild.roles.cache.find(r=>r.name===name);
+    if (!role) { role=await guild.roles.create({name,color,reason:'Owner-only .pookie screenshot setup'}); rolesCreated++; }
+    roleMap.set(name,role);
+   }
+
+   for (const group of categories) {
+    let category=guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory && c.name===group.name);
+    if (!category) { category=await guild.channels.create({name:group.name,type:ChannelType.GuildCategory,reason:'Owner-only .pookie screenshot setup'}); categoriesCreated++; }
+    for (const [name,type] of (group.channels||[])) {
+     const exists=guild.channels.cache.find(c=>c.parentId===category.id && c.type===type && c.name===name);
+     if (exists) { skipped++; continue; }
+     await guild.channels.create({name,type,parent:category.id,reason:'Owner-only .pookie screenshot setup'}); channelsCreated++;
+    }
+    for (const [name] of (group.voices||[])) {
+     const exists=guild.channels.cache.find(c=>c.parentId===category.id && c.type===ChannelType.GuildVoice && c.name===name);
+     if (exists) { skipped++; continue; }
+     await guild.channels.create({name,type:ChannelType.GuildVoice,parent:category.id,reason:'Owner-only .pookie screenshot setup'}); channelsCreated++;
+    }
+   }
+   return message.reply(`✅ **Pookie setup completed.**\\n• Roles created: **${rolesCreated}**\\n• Categories created: **${categoriesCreated}**\\n• Channels created: **${channelsCreated}**\\n• Already existed: **${skipped}**\\n\\n⚠️ Screenshot custom Discord emojis cannot be recovered from pixels alone; visible Unicode symbols are preserved.`).catch(()=>{});
+  } catch (error) {
+   console.error('.pookie error:',error);
+   return message.reply(`❌ **Pookie setup failed.**\\n\`${String(error.message||error).slice(0,250)}\``).catch(()=>{});
+  }
  }
 
  // Secret !setup: only the configured bot owner can build the Lovespot layout.
