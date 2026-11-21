@@ -2697,16 +2697,16 @@ Good luck, everyone! ♡***`);
   // Names/symbols below are transcribed from the supplied Pookie screenshots.
   // Discord custom emoji IDs are not present in screenshots, so visible Unicode symbols are preserved.
   const roleSpecs = [
-   ['ε・ ArchAngel 〜',' #D9DDE1'], ['ε 3・Divine Overseer,',' #D9DDE1'], ['ε 3・Guardian,',' #D9DDE1'],
-   ['ε red 3・✧',' #F3B6B6'], ['ε orange 3・✧',' #F3D0B6'], ['ε yellow 3・✧',' #E8DDAE'],
-   ['ε green 3・✧',' #C5D9C0'], ['ε blue 3・✧',' #BFD4E5'], ['ε purple 3・✧',' #D3C1DD'],
-   ['ε pink 3・✧',' #E6C1D2'], ['♡・VIP・♡',' #D9DDE1'], ['♡・Sub・♡',' #D9DDE1'],
-   ['/◇・artist ʚ',' #D9DDE1'], ['/◇・writer ʚ',' #D9DDE1'], ['/◇・gamer ʚ',' #D9DDE1'], ['/◇・crafter ʚ',' #D9DDE1'],
-   ['☆ owner ☆',' #D9DDE1'], ['◎ admin☆',' #D9DDE1'], ['✂・mod・☆',' #D9DDE1'], ['☆ vip・✦',' #D9DDE1'],
-   ['//・member 🫧',' #D9DDE1'], ['╱╲・musician・🎹',' #D9DDE1'], ['╱╲・gamer・🎧',' #D9DDE1'],
-   ['╱╲・writer・🏠',' #D9DDE1'], ['╱╲・artist・☁️',' #D9DDE1'], ['-・☆・-18',' #D9DDE1'], ['18+・☆',' #D9DDE1'],
-   ['☆ bots ☆',' #D9DDE1'], ['╱・:PC・',' #D9DDE1'], ['╱・:Xbox',' #D9DDE1'], ['╱・:Mobile',' #D9DDE1'],
-   ['╱・:PlayStation',' #D9DDE1'], ['╱・:Nintendo Switch',' #D9DDE1']
+   ['ε・ ArchAngel 〜','#D9DDE1'], ['ε 3・Divine Overseer,','#D9DDE1'], ['ε 3・Guardian,','#D9DDE1'],
+   ['ε red 3・✧','#F3B6B6'], ['ε orange 3・✧','#F3D0B6'], ['ε yellow 3・✧','#E8DDAE'],
+   ['ε green 3・✧','#C5D9C0'], ['ε blue 3・✧','#BFD4E5'], ['ε purple 3・✧','#D3C1DD'],
+   ['ε pink 3・✧','#E6C1D2'], ['♡・VIP・♡','#D9DDE1'], ['♡・Sub・♡','#D9DDE1'],
+   ['/◇・artist ʚ','#D9DDE1'], ['/◇・writer ʚ','#D9DDE1'], ['/◇・gamer ʚ','#D9DDE1'], ['/◇・crafter ʚ','#D9DDE1'],
+   ['☆ owner ☆','#D9DDE1'], ['◎ admin☆','#D9DDE1'], ['✂・mod・☆','#D9DDE1'], ['☆ vip・✦','#D9DDE1'],
+   ['//・member 🫧','#D9DDE1'], ['╱╲・musician・🎹','#D9DDE1'], ['╱╲・gamer・🎧','#D9DDE1'],
+   ['╱╲・writer・🏠','#D9DDE1'], ['╱╲・artist・☁️','#D9DDE1'], ['-・☆・-18','#D9DDE1'], ['18+・☆','#D9DDE1'],
+   ['☆ bots ☆','#D9DDE1'], ['╱・:PC・','#D9DDE1'], ['╱・:Xbox','#D9DDE1'], ['╱・:Mobile','#D9DDE1'],
+   ['╱・:PlayStation','#D9DDE1'], ['╱・:Nintendo Switch','#D9DDE1']
   ];
 
   const categories = [
