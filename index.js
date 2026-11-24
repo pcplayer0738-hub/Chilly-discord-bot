@@ -782,57 +782,38 @@ function nexzuCommandPayload(payload, commandName='command') {
 }
 
 function chillyHelpPayload() {
- const E = {
-  economy:'<:1000023608:1574646202664751206>',
-  rewards:'<:1000023601:1574646167776530483>',
-  moderation:'<:1000023605:157464618675837374>',
-  antinuke:'<:1000023590:1574646140845162569>',
-  automod:'<:1000023582:1574646103704469604>',
-  giveaways:'<:1000023601:1574646167776530483>',
-  fun:'<:1000023603:1574646180506370158>',
-  utility:'<:1000023592:1574646146851409951>',
-  setup:'<:1000023594:1574646153150996541>',
-  jail:'<:1000023604:157464618333756390>',
-  misc:'<:1000023588:1574646133404336138>',
-  tickets:'<:1000023587:1574646124277661776>',
-  leveling:'<:1000023601:1574646167776530483>',
-  botcustom:'<:1000023580:1574646096859242547>',
-  info:'<:1000023589:1574646137493921904>',
-  search:'<:1000023592:1574646146851409951>',
-  settings:'<:1000023594:1574646153150996541>'
- };
  const categories = [
-  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1574646202664751206',name:'1000023608'},line:`${E.economy} » **Economy**`},
-  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.rewards} » **Real Money Rewards**`},
-  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'157464618675837374',name:'1000023605'},line:`${E.moderation} » **Moderation**`},
-  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1574646140845162569',name:'1000023590'},line:`${E.antinuke} » **AntiNuke**`},
-  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1574646103704469604',name:'1000023582'},line:`${E.automod} » **AutoMod**`},
-  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.giveaways} » **Giveaways**`},
-  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1574646180506370158',name:'1000023603'},line:`${E.fun} » **Fun**`},
-  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1574646146851409951',name:'1000023592'},line:`${E.utility} » **Utility**`},
-  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1574646153150996541',name:'1000023594'},line:`${E.setup} » **Server Setup**`},
-  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'157464618333756390',name:'1000023604'},line:`${E.jail} » **Jail**`},
-  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{id:'1574646133404336138',name:'1000023588'},line:`${E.misc} » **Misc**`},
-  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1574646124277661776',name:'1000023587'},line:`${E.tickets} » **Tickets**`},
-  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.leveling} » **Leveling**`},
-  {label:'Bot Custom',description:'Customize Nexzu for this server',value:'botcustom',emoji:{id:'1574646096859242547',name:'1000023580'},line:`${E.botcustom} » **Bot Custom**`}
- ];
- const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>({label:option.label,description:option.description,value:option.value})));
+  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
+  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
+  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
+  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **AntiNuke**'},
+  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **AutoMod**'},
+  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
+  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
+  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
+  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
+  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Jail**'},
+  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
+  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
+  {label:'Music',description:'Music and audio module',value:'music',emoji:{id:'1571576463449137183',name:'1000022225'},line:'<:1000022225:1571576463449137183> » **Music**'},
+  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'}
+ ];;
+ const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
  const invite = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
  const description = [
   "**Hey, I'm Nexzu™**",
   'A powerful multipurpose Discord bot for your community.',
   '',
-  `<:1000023589:1574646137493921904> **My Prefix is**  \`.\`  •  Every command also works with the dot prefix`,
-  `<:1000023597:1574646162328133642> **Total Commands:** \`${commands.length}\``,
-  '<:1000023594:1574646153150996541> **Choose a Specific Module of your Desire**',
+  `<:1000022237:1571576499876921487> **My Prefix is**  \`.\`  •  Every command also works with the dot prefix`,
+  `<:1000022243:1571576512547782718> **Total Commands:** \`${commands.length}\``,
+  '<:1000022241:1571576510081536081> **Choose a Specific Module of your Desire**',
   '',
   categories.map(x=>x.line).join('\n'),
   '',
-  '<:1000023594:1574646153150996541> **Links**',
+  '<:1000022241:1571576510081536081> **Links**',
   `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
  ].join('\n');
- const embed = chillyStyledEmbed({title:'<:1000023589:1574646137493921904> Hey, I\'m Nexzu™',description,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
+ const embed = chillyStyledEmbed({title:'<:1000022239:1571576504599712004> Hey, I\'m Nexzu™',description,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
  return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
 }
 
@@ -1281,14 +1262,7 @@ Logs: <#${log.id}>`,flags:MessageFlags.Ephemeral});
     );
    return i.reply({embeds:[embed]});
   }
-  if(c==='help') {
-   try { return i.reply(chillyHelpPayload()); }
-   catch(error) {
-    console.error('Help payload failed:', error);
-    const fallback=chillyStyledEmbed({title:'✨ Hey, I\'m Nexzu™',description:'Use **/help** to explore commands.\n\nThe command menu is temporarily unavailable; please try again in a moment.',thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
-    return i.reply({embeds:[fallback]});
-   }
-  }
+  if(c==='help') return i.reply(chillyHelpPayload());
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    const buffer=await renderEconomyCard({user:who,command:'balance',balance:a.coins,note:`Rank #${economyRank(who.id)} on the global Nexzu economy`});
@@ -2055,6 +2029,9 @@ client.on('interactionCreate', async i=>{
      '`.list inrole <role>` — List members who have a role.',
      '`.fakeperms <role> <permission>` — Preview/manage fake permissions from a role.'
     ].join('\n')},
+    music:{title:'<:1000022225:1571576463449137183> Music',body:[
+     `${CHILLY_EMOJI.music} Music category is ready. Add your music commands here.`
+    ].join('\n')},
     tickets:{title:'🎟️ tickets',body:[
      '`.ticket` — Manage ticket panels and active tickets.',
      '`.ticket claim` — Claim the current ticket.',
@@ -2067,10 +2044,6 @@ client.on('interactionCreate', async i=>{
      '`.ticket send [panel_id]` — Send a configured ticket panel.',
      '`.ticket setup` — Start the ticket panel setup wizard.'
     ].join('\n')},
-    botcustom:{title:'<:1000023580:1574646096859242547> Bot Custom',body:[
-     'Per-server Nexzu customization: avatar and banner.',
-     'This category is reserved for Bot Custom features.'
-    ].join('\n')},
     leveling:{title:'<:1000022234:1571576486169809048> Leveling Commands',body:[
      '`/level` — View a member’s level and XP.',
      '`/level-leaderboard` — View the server XP leaderboard.',
@@ -2080,7 +2053,7 @@ client.on('interactionCreate', async i=>{
    };
    const page=pages[i.values[0]];
    if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Nexzu Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
-   const categoryEmoji={economy:'<:1000023608:1574646202664751206>',rewards:'<:1000023601:1574646167776530483>',moderation:'<:1000023605:157464618675837374>',antinuke:'<:1000023590:1574646140845162569>',automod:'<:1000023582:1574646103704469604>',giveaways:'<:1000023601:1574646167776530483>',fun:'<:1000023603:1574646180506370158>',utility:'<:1000023592:1574646146851409951>',setup:'<:1000023594:1574646153150996541>',jail:'<:1000023604:157464618333756390>',misc:'<:1000023588:1574646133404336138>',tickets:'<:1000023587:1574646124277661776>',leveling:'<:1000023601:1574646167776530483>',botcustom:'<:1000023580:1574646096859242547>'}[i.values[0]]||'<:1000023589:1574646137493921904>';
+   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,antinuke:CHILLY_EMOJI.security,automod:CHILLY_EMOJI.fun,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,music:CHILLY_EMOJI.music,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
    const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
    return i.update({embeds:[embed],components:i.message.components});
