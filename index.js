@@ -173,6 +173,16 @@ const commands = [
   .addUserOption(o=>o.setName('user').setDescription('Member to release').setRequired(true)),
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+ new SlashCommandBuilder().setName('botcustompfp').setDescription('Set Nexzu’s server-specific avatar')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addAttachmentOption(o=>o.setName('image').setDescription('PNG, JPG or GIF image').setRequired(true)),
+ new SlashCommandBuilder().setName('botcustompfp-remove').setDescription('Remove Nexzu’s server-specific avatar')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+ new SlashCommandBuilder().setName('botcustombanner').setDescription('Set Nexzu’s server-specific banner')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addAttachmentOption(o=>o.setName('image').setDescription('PNG, JPG or GIF image').setRequired(true)),
+ new SlashCommandBuilder().setName('botcustombanner-remove').setDescription('Remove Nexzu’s server-specific banner')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
@@ -973,6 +983,35 @@ async function stealFromSourceMessage(guild, sourceMessage) {
  return {ok:false,message:'❌ I could not find a custom emoji or sticker in that message. Unicode emojis cannot be added as server emojis.'};
 }
 
+async function patchGuildBotProfile(guildId, field, dataUri) {
+ const url = `https://discord.com/api/v10/guilds/${guildId}/members/@me`;
+ const res = await fetch(url, {
+  method: 'PATCH',
+  headers: { 'Authorization': `Bot ${TOKEN}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ [field]: dataUri })
+ });
+ if (!res.ok) {
+  let detail = '';
+  try { detail = JSON.stringify(await res.json()); } catch {}
+  throw new Error(`Discord profile update failed (${res.status}): ${detail}`);
+ }
+ return res.json();
+}
+
+async function attachmentToDataUri(attachment) {
+ if (!attachment?.url) throw new Error('No image attachment was provided.');
+ const contentType = String(attachment.contentType || '').toLowerCase();
+ const name = String(attachment.name || '').toLowerCase();
+ const extType = name.endsWith('.gif') ? 'image/gif' : name.endsWith('.jpg') || name.endsWith('.jpeg') ? 'image/jpeg' : name.endsWith('.webp') ? 'image/webp' : 'image/png';
+ const mime = contentType.startsWith('image/') ? contentType.split(';')[0] : extType;
+ if (!['image/png','image/jpeg','image/gif','image/webp'].includes(mime)) throw new Error('Please upload a PNG, JPG, GIF or WebP image.');
+ const res = await fetch(attachment.url);
+ if (!res.ok) throw new Error(`Could not download the uploaded image (${res.status}).`);
+ const buffer = Buffer.from(await res.arrayBuffer());
+ if (!buffer.length) throw new Error('The uploaded image is empty.');
+ return `data:${mime};base64,${buffer.toString('base64')}`;
+}
+
 async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
   // All normal text replies become branded embeds. Image/card replies remain untouched.
@@ -982,6 +1021,26 @@ async function handleChatInputCommand(i){
   if (_editReply) i.editReply=(payload)=>_editReply(nexzuCommandPayload(payload,c));
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
+  if (['botcustompfp','botcustompfp-remove','botcustombanner','botcustombanner-remove'].includes(c)) {
+   if (!g) return i.reply({content:'❌ This command can only be used inside a server.'});
+   if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isGuildOwner && !isTrustedOwner) {
+    return i.reply({content:'❌ You need **Manage Server** permission to use this command.',flags:MessageFlags.Ephemeral});
+   }
+   const field = c.includes('pfp') ? 'avatar' : 'banner';
+   try {
+    if (c.endsWith('-remove')) {
+     await patchGuildBotProfile(g.id, field, null);
+     return i.reply({content:`✅ Nexzu’s server ${field === 'avatar' ? 'avatar' : 'banner'} has been removed.`});
+    }
+    const attachment = i.options.getAttachment('image', true);
+    const dataUri = await attachmentToDataUri(attachment);
+    await patchGuildBotProfile(g.id, field, dataUri);
+    return i.reply({content:`✅ Nexzu’s ${field === 'avatar' ? 'server-specific PFP' : 'server-specific banner'} has been updated for **${g.name}**.`});
+   } catch (error) {
+    console.error(`Bot custom ${field} error:`, error);
+    return i.reply({content:`❌ Could not update Nexzu’s server ${field === 'avatar' ? 'PFP' : 'banner'}.\n\`${String(error.message || error).slice(0,500)}\``,flags:MessageFlags.Ephemeral});
+   }
+  }
   const target=i.options.getUser('user', false);
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',flags:MessageFlags.Ephemeral});
