@@ -770,82 +770,132 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
 
 // Convert simple command replies into Nexzu-styled embeds. Replies that already
 // contain embeds/files/components are left untouched (for example economy image cards).
-function nexzuCommandPayload(payload, commandName='command') {
- if (typeof payload === 'string') payload={content:payload};
- if (!payload || typeof payload !== 'object') return payload;
- // Components V2 payloads (such as /help) are already native boxes.
- if (payload.flags && (Number(payload.flags) & Number(MessageFlags.IsComponentsV2 ?? 32768)) && payload.components?.length) return payload;
- // Image/file-only responses are intentionally preserved so generated cards/files still render normally.
- if (payload.files?.length && !payload.content && !payload.embeds?.length) return payload;
+function rawComponentJSON(component) {
+ try {
+  if (component?.toJSON) return component.toJSON();
+  if (component?.data) return component.data;
+ } catch {}
+ return component;
+}
 
- const v2Flag = MessageFlags.IsComponentsV2 ?? 32768;
- const flags = Number(payload.flags || 0) | Number(v2Flag);
- const embeds = Array.isArray(payload.embeds) ? payload.embeds : [];
- const firstEmbed = embeds[0];
-
- let text = '';
- let title = '';
- let thumbnailUrl = null;
-
- if (payload.content) text = String(payload.content).trim();
- if (firstEmbed) {
-  title = firstEmbed.title ? String(firstEmbed.title) : '';
-  const desc = firstEmbed.description ? String(firstEmbed.description) : '';
-  if (!text) text = desc;
-  else if (desc) text += `\n\n${desc}`;
-  if (Array.isArray(firstEmbed.fields) && firstEmbed.fields.length) {
-   const fields = firstEmbed.fields.map(f => `**${String(f.name || 'Field')}**\n${String(f.value || '—')}`).join('\n\n');
-   text += `${text ? '\n\n' : ''}${fields}`;
-  }
-  thumbnailUrl = firstEmbed.thumbnail?.url || firstEmbed.image?.url || null;
-  if (firstEmbed.footer?.text) text += `${text ? '\n\n' : ''}${String(firstEmbed.footer.text)}`;
+function makeNativeContainer({title='', text='', accent=0x6f2dbd, thumbnailUrl=null, components=[]}={}) {
+ const inner=[];
+ const heading = title ? `# ${title}\n\n` : '';
+ if (thumbnailUrl) {
+  inner.push({
+   type: 9,
+   components:[{type:10,content:heading + String(text || '')}],
+   accessory:{type:11,media:{url:thumbnailUrl}}
+  });
+ } else if (heading || text) {
+  inner.push({type:10,content:heading + String(text || '')});
  }
-
- if (!text && !title) return payload;
-
- const icon = text.match(/^(?:<a?:[^>]+>|[⛔❌⚠️🚫✅☑️ℹ️📌])/u)?.[0] || CHILLY_EMOJI.sparkle;
- let accent = 0x6f2dbd;
- if (/^(?:⛔|❌|⚠️|🚫)/u.test(text)) accent = 0x8f3340;
- else if (/^(?:✅|☑️)/u.test(text)) accent = 0x2f8f62;
- else if (/^(?:ℹ️|📌)/u.test(text)) accent = 0x3b6ea8;
-
- const container = new ContainerBuilder().setAccentColor(accent);
- const heading = title || `${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`;
- const body = title && text ? `# ${title}\n\n${text}` : (title ? `# ${title}` : text);
-
- if (thumbnailUrl && typeof SectionBuilder === 'function' && typeof ThumbnailBuilder === 'function') {
-  const section = new SectionBuilder()
-   .addTextDisplayComponents(new TextDisplayBuilder().setContent(body))
-   .setThumbnailAccessory(new ThumbnailBuilder().setURL(thumbnailUrl));
-  container.addSectionComponents(section);
- } else {
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
- }
-
- if (Array.isArray(payload.components) && payload.components.length) {
-  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-  for (const component of payload.components) {
-   // Existing action rows remain usable inside the native container.
-   if (component?.data?.type === 1 || component?.type === 1) {
-    container.addActionRowComponents(component);
-   } else if (component?.data?.type === 14 || component?.type === 14) {
-    container.addSeparatorComponents(component);
-   } else if (component?.data?.type === 9 || component?.type === 9) {
-    container.addSectionComponents(component);
-   } else {
-    // Unknown/unsupported legacy components are left out rather than crashing the command.
-   }
+ if (components.length) {
+  inner.push({type:14,divider:true,spacing:1});
+  for (const c of components) {
+   const raw=rawComponentJSON(c);
+   if (raw?.type===1 || raw?.type===9 || raw?.type===10 || raw?.type===12 || raw?.type===13 || raw?.type===14) inner.push(raw);
   }
  }
-
  return {
-  ...payload,
-  content: undefined,
-  embeds: undefined,
-  components: [container],
-  flags
+  flags: MessageFlags.IsComponentsV2 ?? 32768,
+  components:[{type:17,accent_color:accent,components:inner}]
  };
 }
+
+// Convert command replies to Discord Components V2 native boxes. No EmbedBuilder
+// is used for normal command responses.
+function nexzuCommandPayload(payload, commandName='command') {
+ if (typeof payload==='string') payload={content:payload};
+ if (!payload || typeof payload!=='object') return payload;
+ const v2Flag=MessageFlags.IsComponentsV2 ?? 32768;
+ if (payload.flags && (Number(payload.flags)&Number(v2Flag)) && payload.components?.length) return payload;
+ if (payload.files?.length && !payload.content && !payload.embeds?.length) return payload;
+
+ let text=payload.content ? String(payload.content).trim() : '';
+ let title='';
+ let thumbnailUrl=null;
+ const firstEmbed=Array.isArray(payload.embeds) ? payload.embeds[0] : null;
+ if (firstEmbed) {
+  title=firstEmbed.title ? String(firstEmbed.title) : '';
+  const desc=firstEmbed.description ? String(firstEmbed.description) : '';
+  if (!text) text=desc; else if (desc) text += `\n\n${desc}`;
+  if (Array.isArray(firstEmbed.fields) && firstEmbed.fields.length) {
+   const fields=firstEmbed.fields.map(f=>`**${String(f.name||'Field')}**\n${String(f.value||'—')}`).join('\n\n');
+   text += `${text?'\n\n':''}${fields}`;
+  }
+  if (firstEmbed.footer?.text) text += `${text?'\n\n':''}${String(firstEmbed.footer.text)}`;
+  thumbnailUrl=firstEmbed.thumbnail?.url || null;
+ }
+ if (!text && !title && !payload.components?.length) return payload;
+
+ let accent=0x6f2dbd;
+ if (/^(?:⛔|❌|⚠️|🚫)/u.test(text)) accent=0x8f3340;
+ else if (/^(?:✅|☑️)/u.test(text)) accent=0x2f8f62;
+ else if (/^(?:ℹ️|📌)/u.test(text)) accent=0x3b6ea8;
+ const heading=title || `${CHILLY_EMOJI.sparkle} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`;
+ const converted=(payload.components||[]).map(rawComponentJSON);
+ const box=makeNativeContainer({title:heading,text,accent,thumbnailUrl,components:converted});
+ const preservedFlags=Number(payload.flags||0) & Number(MessageFlags.Ephemeral||64);
+ return {...payload,content:undefined,embeds:undefined,components:box.components,flags:(Number(box.flags)||v2Flag)|preservedFlags};
+}
+
+function chillyHelpCategories() {
+ return [
+  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
+  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
+  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
+  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **AntiNuke**'},
+  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **AutoMod**'},
+  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
+  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
+  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
+  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
+  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Jail**'},
+  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
+  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
+  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'},
+  {label:'Bot Profile',description:'Customize Nexzu for this server',value:'botprofile',emoji:{name:'🤖'},line:'🤖 » **Bot Profile**'}
+ ];
+}
+
+function chillyHelpSelectRow() {
+ const categories=chillyHelpCategories();
+ const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
+ return new ActionRowBuilder().addComponents(menu);
+}
+
+function chillyHelpV2Payload({title,body}={}) {
+ const categories=chillyHelpCategories();
+ const invite=`https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
+ const avatar=client.user?.displayAvatarURL?.({extension:'png',size:256}) || 'https://cdn.discordapp.com/embed/avatars/0.png';
+ const intro=body || [
+  `**Your all-in-one Discord companion**`,
+  '',
+  `Nexzu is a full-featured Discord bot built to run and protect your server end to end — moderation, AntiNuke security, AutoMod, tickets, economy, giveaways, leveling, utilities and more.`,
+  '',
+  `> **Prefix for this server:** \.`,
+  `> **Slash commands:** Use \/help and the command dropdowns below`,
+  `> **Total Commands:** \`${commands.length}\``,
+  `> **Need help?** Use \/support or ask me with an @mention`,
+  '',
+  categories.map(x=>x.line).join('\n'),
+  '',
+  `**Links:** [Invite Me](${invite}) • [Support Server](https://discord.gg/TFVrsdNWGx)`
+ ].join('\n');
+ const menu=rawComponentJSON(chillyHelpSelectRow());
+ return {
+  flags:MessageFlags.IsComponentsV2 ?? 32768,
+  components:[{type:17,accent_color:0x6f2dbd,components:[
+   {type:9,components:[{type:10,content:`# Hey, I'm Nexzu™\n\n${intro}`}],accessory:{type:11,media:{url:avatar}}},
+   {type:14,divider:true,spacing:1},
+   {type:1,components:menu.components||menu}
+  ]}]
+ };
+}
+
+function chillyHelpPayload() { return chillyHelpV2Payload(); }
+
 function chillyHelpCategories() {
  return [
   {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
