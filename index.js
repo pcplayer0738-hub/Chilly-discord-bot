@@ -1,8 +1,7 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, MessageFlags, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder,
-  ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder
+  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder
 } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('node:path');
@@ -174,12 +173,6 @@ const commands = [
   .addUserOption(o=>o.setName('user').setDescription('Member to release').setRequired(true)),
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
- new SlashCommandBuilder().setName('botprofile').setDescription('Customize Nexzu per-server profile')
-  .addSubcommand(sub=>sub.setName('avatar').setDescription('Set Nexzu avatar for this server')
-   .addAttachmentOption(o=>o.setName('image').setDescription('Avatar image (PNG, JPG or GIF)').setRequired(true)))
-  .addSubcommand(sub=>sub.setName('banner').setDescription('Set Nexzu banner for this server')
-   .addAttachmentOption(o=>o.setName('image').setDescription('Banner image (PNG, JPG or GIF)').setRequired(true)))
-  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset Nexzu server-specific avatar and banner')),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
@@ -701,7 +694,7 @@ async function logAction(guild, embed) {
   const cfg=settings(guild.id);
   if(!cfg.log_channel) return;
   const channel=await guild.channels.fetch(cfg.log_channel).catch(()=>null);
-  if(channel && channel.isTextBased()) await channel.send(nexzuCommandPayload({embeds:[embed]}, 'command')).catch(()=>{});
+  if(channel && channel.isTextBased()) await channel.send({embeds:[embed]}).catch(()=>{});
  } catch(e) { console.error('Log delivery error:',e); }
 }
 function auditEmbed(title, color, fields) {
@@ -770,199 +763,77 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
 
 // Convert simple command replies into Nexzu-styled embeds. Replies that already
 // contain embeds/files/components are left untouched (for example economy image cards).
-function rawComponentJSON(component) {
- try {
-  if (component?.toJSON) return component.toJSON();
-  if (component?.data) return component.data;
- } catch {}
- return component;
-}
-
-function makeNativeContainer({title='', text='', accent=0x6f2dbd, thumbnailUrl=null, components=[]}={}) {
- const inner=[];
- const heading = title ? `# ${title}\n\n` : '';
- if (thumbnailUrl) {
-  inner.push({
-   type: 9,
-   components:[{type:10,content:heading + String(text || '')}],
-   accessory:{type:11,media:{url:thumbnailUrl}}
-  });
- } else if (heading || text) {
-  inner.push({type:10,content:heading + String(text || '')});
- }
- if (components.length) {
-  inner.push({type:14,divider:true,spacing:1});
-  for (const c of components) {
-   const raw=rawComponentJSON(c);
-   if (raw?.type===1 || raw?.type===9 || raw?.type===10 || raw?.type===12 || raw?.type===13 || raw?.type===14) inner.push(raw);
-  }
- }
- return {
-  flags: MessageFlags.IsComponentsV2 ?? 32768,
-  components:[{type:17,accent_color:accent,components:inner}]
- };
-}
-
-// Convert command replies to Discord Components V2 native boxes. No EmbedBuilder
-// is used for normal command responses.
 function nexzuCommandPayload(payload, commandName='command') {
- if (typeof payload==='string') payload={content:payload};
- if (!payload || typeof payload!=='object') return payload;
- const v2Flag=MessageFlags.IsComponentsV2 ?? 32768;
- if (payload.flags && (Number(payload.flags)&Number(v2Flag)) && payload.components?.length) return payload;
- if (payload.files?.length && !payload.content && !payload.embeds?.length) return payload;
-
- let text=payload.content ? String(payload.content).trim() : '';
- let title='';
- let thumbnailUrl=null;
- const firstEmbed=Array.isArray(payload.embeds) ? payload.embeds[0] : null;
- if (firstEmbed) {
-  title=firstEmbed.title ? String(firstEmbed.title) : '';
-  const desc=firstEmbed.description ? String(firstEmbed.description) : '';
-  if (!text) text=desc; else if (desc) text += `\n\n${desc}`;
-  if (Array.isArray(firstEmbed.fields) && firstEmbed.fields.length) {
-   const fields=firstEmbed.fields.map(f=>`**${String(f.name||'Field')}**\n${String(f.value||'—')}`).join('\n\n');
-   text += `${text?'\n\n':''}${fields}`;
-  }
-  if (firstEmbed.footer?.text) text += `${text?'\n\n':''}${String(firstEmbed.footer.text)}`;
-  thumbnailUrl=firstEmbed.thumbnail?.url || null;
- }
- if (!text && !title && !payload.components?.length) return payload;
-
- let accent=0x6f2dbd;
- if (/^(?:⛔|❌|⚠️|🚫)/u.test(text)) accent=0x8f3340;
- else if (/^(?:✅|☑️)/u.test(text)) accent=0x2f8f62;
- else if (/^(?:ℹ️|📌)/u.test(text)) accent=0x3b6ea8;
- const heading=title || `${CHILLY_EMOJI.sparkle} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`;
- const converted=(payload.components||[]).map(rawComponentJSON);
- const box=makeNativeContainer({title:heading,text,accent,thumbnailUrl,components:converted});
- const preservedFlags=Number(payload.flags||0) & Number(MessageFlags.Ephemeral||64);
- return {...payload,content:undefined,embeds:undefined,components:box.components,flags:(Number(box.flags)||v2Flag)|preservedFlags};
-}
-
-function chillyHelpCategories() {
- return [
-  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
-  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
-  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
-  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **AntiNuke**'},
-  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **AutoMod**'},
-  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
-  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
-  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
-  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
-  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Jail**'},
-  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
-  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
-  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'},
-  {label:'Bot Profile',description:'Customize Nexzu for this server',value:'botprofile',emoji:{name:'🤖'},line:'🤖 » **Bot Profile**'}
- ];
-}
-
-function chillyHelpSelectRow() {
- const categories=chillyHelpCategories();
- const menu=new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
- return new ActionRowBuilder().addComponents(menu);
-}
-
-function chillyHelpV2Payload({title,body}={}) {
- const categories=chillyHelpCategories();
- const invite=`https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
- const avatar=client.user?.displayAvatarURL?.({extension:'png',size:256}) || 'https://cdn.discordapp.com/embed/avatars/0.png';
- const intro=body || [
-  `**Your all-in-one Discord companion**`,
-  '',
-  `Nexzu is a full-featured Discord bot built to run and protect your server end to end — moderation, AntiNuke security, AutoMod, tickets, economy, giveaways, leveling, utilities and more.`,
-  '',
-  `> **Prefix for this server:** \.`,
-  `> **Slash commands:** Use \/help and the command dropdowns below`,
-  `> **Total Commands:** \`${commands.length}\``,
-  `> **Need help?** Use \/support or ask me with an @mention`,
-  '',
-  categories.map(x=>x.line).join('\n'),
-  '',
-  `**Links:** [Invite Me](${invite}) • [Support Server](https://discord.gg/TFVrsdNWGx)`
- ].join('\n');
- const menu=rawComponentJSON(chillyHelpSelectRow());
+ if (typeof payload === 'string') payload={content:payload};
+ if (!payload || typeof payload !== 'object') return payload;
+ if (payload.embeds?.length || payload.files?.length || payload.components?.length) return payload;
+ if (!payload.content) return payload;
+ const text=String(payload.content).trim();
+ let icon=CHILLY_EMOJI.sparkle;
+ let color=0x363640;
+ if (/^(?:⛔|❌|⚠️|🚫)/.test(text)) { icon=CHILLY_EMOJI.rejected; color=0x4a2028; }
+ else if (/^(?:✅|☑️)/.test(text)) { icon=CHILLY_EMOJI.success; color=0x1f4a36; }
+ else if (/^(?:ℹ️|📌)/.test(text)) { icon=CHILLY_EMOJI.utility; }
  return {
-  flags:MessageFlags.IsComponentsV2 ?? 32768,
-  components:[{type:17,accent_color:0x6f2dbd,components:[
-   {type:9,components:[{type:10,content:`# Hey, I'm Nexzu™\n\n${intro}`}],accessory:{type:11,media:{url:avatar}}},
-   {type:14,divider:true,spacing:1},
-   {type:1,components:menu.components||menu}
-  ]}]
+  ...payload,
+  content: undefined,
+  embeds:[chillyStyledEmbed({title:`${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`,description:text,color})]
  };
-}
-
-function chillyHelpPayload() { return chillyHelpV2Payload(); }
-
-function chillyHelpCategories() {
- return [
-  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
-  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
-  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
-  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **AntiNuke**'},
-  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **AutoMod**'},
-  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Giveaways**'},
-  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1571576507070030027',name:'1000022240'},line:'<:1000022240:1571576507070030027> » **Fun**'},
-  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1571576478452285621',name:'1000022230'},line:'<:1000022230:1571576478452285621> » **Utility**'},
-  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1571576502292713716',name:'1000022238'},line:'<:1000022238:1571576502292713716> » **Server Setup**'},
-  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Jail**'},
-  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
-  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
-  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'},
-  {label:'Bot Profile',description:'Customize Nexzu for this server',value:'botprofile',emoji:{name:'🤖'},line:'🤖 » **Bot Profile**'}
- ];
-}
-
-function chillyHelpSelectRow() {
- const categories=chillyHelpCategories();
- const menu=new StringSelectMenuBuilder()
-  .setCustomId('chilly_help_category')
-  .setPlaceholder('Home  ›  Choose a category')
-  .addOptions(categories.map(({line,...option})=>option));
- return new ActionRowBuilder().addComponents(menu);
-}
-
-function chillyHelpV2Payload({title,body,showHome=true}={}) {
- const categories=chillyHelpCategories();
- const invite=`https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
- const avatar=client.user?.displayAvatarURL?.({extension:'png',size:256}) || 'https://cdn.discordapp.com/embed/avatars/0.png';
- const intro=body || [
-  `# <:1000022239:1571576504599712004> Hey, I'm Nexzu™`,
-  `> Your all-in-one Discord companion`,
-  '',
-  `Nexzu is a full-featured Discord bot built to run and protect your server end to end — moderation, AntiNuke security, AutoMod, tickets, economy, giveaways, leveling, utilities and more.`,
-  '',
-  `> **Prefix for this server:** \.`,
-  `> **Slash commands:** Use \/help and the command dropdowns below`,
-  `> **Total Commands:** \`${commands.length}\``,
-  `> **Need help?** Use \/support or ask me with an @mention`,
-  '',
-  categories.map(x=>x.line).join('\n'),
-  '',
-  `**Links:** [Invite Me](${invite}) • [Support Server](https://discord.gg/TFVrsdNWGx)`
- ].join('\n');
-
- // Components V2: this is a native Discord Container, not an Embed.
- if (typeof ContainerBuilder==='function' && typeof TextDisplayBuilder==='function' && typeof SectionBuilder==='function' && typeof ThumbnailBuilder==='function') {
-  const container=new ContainerBuilder().setAccentColor(0x6f2dbd);
-  const section=new SectionBuilder()
-   .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro))
-   .setThumbnailAccessory(new ThumbnailBuilder().setURL(avatar));
-  container.addSectionComponents(section);
-  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-  container.addActionRowComponents(chillyHelpSelectRow());
-  if (title && body) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${title}\n\n${body}`));
-  return {flags: MessageFlags.IsComponentsV2 ?? 32768, components:[container]};
- }
-
- // Fallback for an older discord.js build.
- return {embeds:[chillyStyledEmbed({title:title||'<:1000022239:1571576504599712004> Hey, I\'m Nexzu™',description:intro,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'})],components:[chillyHelpSelectRow()]};
 }
 
 function chillyHelpPayload() {
- return chillyHelpV2Payload();
+ const E = {
+  economy:'<:1000023608:1574646202664751206>',
+  rewards:'<:1000023601:1574646167776530483>',
+  moderation:'<:1000023605:157464618675837374>',
+  antinuke:'<:1000023590:1574646140845162569>',
+  automod:'<:1000023582:1574646103704469604>',
+  giveaways:'<:1000023601:1574646167776530483>',
+  fun:'<:1000023603:1574646180506370158>',
+  utility:'<:1000023592:1574646146851409951>',
+  setup:'<:1000023594:1574646153150996541>',
+  jail:'<:1000023604:157464618333756390>',
+  misc:'<:1000023588:1574646133404336138>',
+  tickets:'<:1000023587:1574646124277661776>',
+  leveling:'<:1000023601:1574646167776530483>',
+  botcustom:'<:1000023580:1574646096859242547>',
+  info:'<:1000023589:1574646137493921904>',
+  search:'<:1000023592:1574646146851409951>',
+  settings:'<:1000023594:1574646153150996541>'
+ };
+ const categories = [
+  {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1574646202664751206',name:'1000023608'},line:`${E.economy} » **Economy**`},
+  {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.rewards} » **Real Money Rewards**`},
+  {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'157464618675837374',name:'1000023605'},line:`${E.moderation} » **Moderation**`},
+  {label:'AntiNuke',description:'Server anti-nuke protection',value:'antinuke',emoji:{id:'1574646140845162569',name:'1000023590'},line:`${E.antinuke} » **AntiNuke**`},
+  {label:'AutoMod',description:'Automod and bot protection',value:'automod',emoji:{id:'1574646103704469604',name:'1000023582'},line:`${E.automod} » **AutoMod**`},
+  {label:'Giveaways',description:'Create and manage giveaways',value:'giveaways',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.giveaways} » **Giveaways**`},
+  {label:'Fun',description:'Games and fun commands',value:'fun',emoji:{id:'1574646180506370158',name:'1000023603'},line:`${E.fun} » **Fun**`},
+  {label:'Utility',description:'Useful server tools',value:'utility',emoji:{id:'1574646146851409951',name:'1000023592'},line:`${E.utility} » **Utility**`},
+  {label:'Server Setup',description:'Configure server features',value:'setup',emoji:{id:'1574646153150996541',name:'1000023594'},line:`${E.setup} » **Server Setup**`},
+  {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'157464618333756390',name:'1000023604'},line:`${E.jail} » **Jail**`},
+  {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{id:'1574646133404336138',name:'1000023588'},line:`${E.misc} » **Misc**`},
+  {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1574646124277661776',name:'1000023587'},line:`${E.tickets} » **Tickets**`},
+  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.leveling} » **Leveling**`},
+  {label:'Bot Custom',description:'Customize Nexzu for this server',value:'botcustom',emoji:{id:'1574646096859242547',name:'1000023580'},line:`${E.botcustom} » **Bot Custom**`}
+ ];
+ const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
+ const invite = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
+ const description = [
+  "**Hey, I'm Nexzu™**",
+  'A powerful multipurpose Discord bot for your community.',
+  '',
+  `<:1000023589:1574646137493921904> **My Prefix is**  \`.\`  •  Every command also works with the dot prefix`,
+  `<:1000023597:1574646162328133642> **Total Commands:** \`${commands.length}\``,
+  '<:1000023594:1574646153150996541> **Choose a Specific Module of your Desire**',
+  '',
+  categories.map(x=>x.line).join('\n'),
+  '',
+  '<:1000023594:1574646153150996541> **Links**',
+  `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
+ ].join('\n');
+ const embed = chillyStyledEmbed({title:'<:1000023589:1574646137493921904> Hey, I\'m Nexzu™',description,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
+ return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
 }
 
 function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
@@ -1121,32 +992,6 @@ async function stealFromSourceMessage(guild, sourceMessage) {
  return {ok:false,message:'❌ I could not find a custom emoji or sticker in that message. Unicode emojis cannot be added as server emojis.'};
 }
 
-async function updateNexzuServerProfile(guild, changes) {
-  if (!guild) throw new Error('This command can only be used inside a server.');
-  // Discord's per-guild bot profile uses Modify Current Member. Unlike
-  // client.user.edit(), this changes Nexzu only inside the current guild.
-  const body = {};
-  for (const [key, value] of Object.entries(changes || {})) {
-    if (value !== undefined) body[key] = value;
-  }
-  return client.rest.patch(`/guilds/${guild.id}/members/@me`, { body });
-}
-
-async function attachmentToDataURI(attachment) {
-  if (!attachment?.url) throw new Error('No image attachment was provided.');
-  const contentType = String(attachment.contentType || '').toLowerCase();
-  const name = String(attachment.name || '').toLowerCase();
-  const allowed = contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name);
-  if (!allowed) throw new Error('Please upload a PNG, JPG, GIF, or WEBP image.');
-  if (attachment.size && attachment.size > 10 * 1024 * 1024) throw new Error('The image must be 10 MB or smaller.');
-  const res = await fetch(attachment.url);
-  if (!res.ok) throw new Error(`Discord could not download the image (HTTP ${res.status}).`);
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (buffer.length > 10 * 1024 * 1024) throw new Error('The image must be 10 MB or smaller.');
-  const mime = contentType.startsWith('image/') ? contentType : (name.endsWith('.gif') ? 'image/gif' : name.endsWith('.webp') ? 'image/webp' : name.endsWith('.png') ? 'image/png' : 'image/jpeg');
-  return `data:${mime};base64,${buffer.toString('base64')}`;
-}
-
 async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
   // All normal text replies become branded embeds. Image/card replies remain untouched.
@@ -1157,31 +1002,6 @@ async function handleChatInputCommand(i){
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
   const target=i.options.getUser('user', false);
-  if(c==='botprofile') {
-   if(!g) return i.reply({content:'❌ This command can only be used inside a server.',flags:MessageFlags.Ephemeral});
-   if(!isTrustedOwner && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    return i.reply({content:'❌ You need **Manage Server** permission to customize Nexzu.',flags:MessageFlags.Ephemeral});
-   }
-   const sub=i.options.getSubcommand();
-   try {
-    if(sub==='avatar' || sub==='banner') {
-     const attachment=i.options.getAttachment('image',true);
-     const data=await attachmentToDataURI(attachment);
-     await updateNexzuServerProfile(g,{[sub]:data});
-     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's **${sub}** has been updated for **${g.name}** only.
-
-${CHILLY_EMOJI.dot} Other servers will keep their own Nexzu profile.`,flags:MessageFlags.Ephemeral});
-    }
-    if(sub==='reset') {
-     await updateNexzuServerProfile(g,{avatar:null,banner:null});
-     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server-specific **avatar and banner** have been reset.`,flags:MessageFlags.Ephemeral});
-    }
-   } catch(error) {
-    console.error('botprofile error:',error?.rawError || error);
-    const detail=error?.status===403?'Discord rejected the profile update. Make sure Nexzu is installed correctly in this server.':error?.status===400?'Discord rejected the image/profile data. Try a PNG/JPG/GIF image under 10 MB.':'The profile update failed. Please try again.';
-    return i.reply({content:`${CHILLY_EMOJI.rejected} ${detail}`,flags:MessageFlags.Ephemeral});
-   }
-  }
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',flags:MessageFlags.Ephemeral});
    const channel=i.options.getChannel('channel');
@@ -1363,7 +1183,7 @@ Logs: <#${log.id}>`,flags:MessageFlags.Ephemeral});
     const rows=[];
     for(let n=0;n<buttons.length;n+=5) rows.push(new ActionRowBuilder().addComponents(buttons.slice(n,n+5).map(b=>{const btn=new ButtonBuilder().setCustomId(`chilly_ticket_open:${b.ticket_key}`).setLabel(b.label).setStyle(ButtonStyle.Primary); if(b.emoji) btn.setEmoji(b.emoji); return btn;})));
     const channel=i.options.getChannel('channel');
-    await channel.send(nexzuCommandPayload({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${i.options.getString('title')}`,description:`${CHILLY_EMOJI.dot} ${i.options.getString('description')}`,footer:'Nexzu • Tickets'})],components:rows}, 'ticket'));
+    await channel.send({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${i.options.getString('title')}`,description:`${CHILLY_EMOJI.dot} ${i.options.getString('description')}`,footer:'Nexzu • Tickets'})],components:rows});
     return i.reply({content:`✅ Ticket panel posted in ${channel} with ${buttons.length} custom button(s).`,flags:MessageFlags.Ephemeral});
    }
   }
@@ -1714,7 +1534,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
    if(to.id===TRUSTED_OWNER_ID) return i.reply({content:'🛡️ This user is protected. Nexzu cannot warn this account.',flags:MessageFlags.Ephemeral});
    let dmDone=false;
-   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
+   try { await to.send({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
    const embed=moderationEmbed({title:'User has been warned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1737,7 +1557,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    if(c==='timeout') {
     const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
     let dmDone=false;
-    try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been timed out!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
+    try { await to.send({embeds:[moderationEmbed({title:'You have been timed out!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
     await m.timeout(mins*60000,reason);
     const embed=moderationEmbed({title:'User has been timed out!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,duration:`${mins} minute(s)`,dmDone,avatar:to.displayAvatarURL()});
     await logAction(g,embed);
@@ -1745,7 +1565,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    }
    const reason='Timeout removed';
    let dmDone=false;
-   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'Your timeout has been removed!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
+   try { await to.send({embeds:[moderationEmbed({title:'Your timeout has been removed!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    await m.timeout(null,reason);
    const embed=moderationEmbed({title:'User has been unmuted!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1757,7 +1577,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',flags:MessageFlags.Ephemeral});
    let dmDone=false;
-   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:c==='kick'?'You have been kicked!':'You have been banned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
+   try { await to.send({embeds:[moderationEmbed({title:c==='kick'?'You have been kicked!':'You have been banned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
    if(c==='kick') await m.kick(reason); else await m.ban({reason});
    const embed=moderationEmbed({title:c==='kick'?'User has been kicked!':'User has been banned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1769,7 +1589,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    try { to=await client.users.fetch(id); } catch {}
    await g.members.unban(id,reason);
    let dmDone=false;
-   if(to) { try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been unbanned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {} }
+   if(to) { try { await to.send({embeds:[moderationEmbed({title:'You have been unbanned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {} }
    const embed=moderationEmbed({title:'User has been unbanned!',targetLabel:'User',targetName:to ? to.tag : `\`${id}\``,targetId:id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to?.displayAvatarURL()});
    await logAction(g,embed);
    return i.reply({embeds:[embed]});
@@ -1918,7 +1738,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const labels={gender:'Gender',age:'Age',relation:'Relation'}, label=labels[type] || 'Roles';
    const embed=chillyStyledEmbed({title:'__React to get your roles__',description:`🎀 **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`,footer:'Nexzu • Self Roles • React to receive your role'});
    try {
-    const sent=await target.send(nexzuCommandPayload({embeds:[embed]}, 'selfrole'));
+    const sent=await target.send({embeds:[embed]});
     await sent.react(e1.reactValue); await sent.react(e2.reactValue);
     const save=db.prepare('INSERT INTO reaction_roles(guild,channel,message,emoji_key,emoji_input,role) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,message,emoji_key) DO UPDATE SET channel=excluded.channel,emoji_input=excluded.emoji_input,role=excluded.role');
     save.run(g.id,sent.channelId,sent.id,e1.key,emojiInput1,role1.id); save.run(g.id,sent.channelId,sent.id,e2.key,emojiInput2,role2.id);
@@ -1991,10 +1811,6 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
 
 client.on('interactionCreate', async i=>{
  try {
-  const _ir=i.reply?.bind(i), _ifu=i.followUp?.bind(i), _ier=i.editReply?.bind(i);
-  if (_ir) i.reply=(payload)=>_ir(nexzuCommandPayload(payload, i.commandName || 'interaction'));
-  if (_ifu) i.followUp=(payload)=>_ifu(nexzuCommandPayload(payload, i.commandName || 'interaction'));
-  if (_ier) i.editReply=(payload)=>_ier(nexzuCommandPayload(payload, i.commandName || 'interaction'));
   if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
    const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
    const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
@@ -2004,7 +1820,7 @@ client.on('interactionCreate', async i=>{
    const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
    const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send(nexzuCommandPayload({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Nexzu • Tickets'})],components:[row]}, 'ticket'));
+   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Nexzu • Tickets'})],components:[row]});
    return i.reply({content:`Ticket created: ${ch}`,flags:MessageFlags.Ephemeral});
   }
   if(i.isButton()&&i.customId==='chilly_ticket_claim') {
@@ -2244,26 +2060,23 @@ client.on('interactionCreate', async i=>{
      '`.ticket send [panel_id]` — Send a configured ticket panel.',
      '`.ticket setup` — Start the ticket panel setup wizard.'
     ].join('\n')},
+    botcustom:{title:'<:1000023580:1574646096859242547> Bot Custom',body:[
+     'Per-server Nexzu customization: avatar and banner.',
+     'This category is reserved for Bot Custom features.'
+    ].join('\n')},
     leveling:{title:'<:1000022234:1571576486169809048> Leveling Commands',body:[
      '`/level` — View a member’s level and XP.',
      '`/level-leaderboard` — View the server XP leaderboard.',
      '`/levelup-setup` — Configure level-up notifications.',
      '`/levelrole` — Manage level-based role rewards.'
-    ].join('\n')},
-    botprofile:{title:'🤖 Bot Profile Commands',body:[
-     '`/botprofile avatar` — Set Nexzu’s server-specific avatar.',
-     '`/botprofile banner` — Set Nexzu’s server-specific banner.',
-     '`/botprofile reset` — Reset Nexzu’s server-specific avatar and banner.',
-     '`.botprofile avatar` — Set the server-specific avatar using an attached image.',
-     '`.botprofile banner` — Set the server-specific banner using an attached image.',
-     '`.botprofile reset` — Reset the server-specific avatar and banner.'
     ].join('\n')}
    };
    const page=pages[i.values[0]];
-   if(!page || !page.body.trim()) return i.update(chillyHelpV2Payload({title:`${CHILLY_EMOJI.utility} Nexzu Command Center`,body:'No commands are currently available in this category.'}));
-   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,antinuke:CHILLY_EMOJI.security,automod:CHILLY_EMOJI.fun,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level,botprofile:'🤖'}[i.values[0]]||CHILLY_EMOJI.dot;
+   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Nexzu Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
+   const categoryEmoji={economy:'<:1000023608:1574646202664751206>',rewards:'<:1000023601:1574646167776530483>',moderation:'<:1000023605:157464618675837374>',antinuke:'<:1000023590:1574646140845162569>',automod:'<:1000023582:1574646103704469604>',giveaways:'<:1000023601:1574646167776530483>',fun:'<:1000023603:1574646180506370158>',utility:'<:1000023592:1574646146851409951>',setup:'<:1000023594:1574646153150996541>',jail:'<:1000023604:157464618333756390>',misc:'<:1000023588:1574646133404336138>',tickets:'<:1000023587:1574646124277661776>',leveling:'<:1000023601:1574646167776530483>',botcustom:'<:1000023580:1574646096859242547>'}[i.values[0]]||'<:1000023589:1574646137493921904>';
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
-   return i.update(chillyHelpV2Payload({title:page.title,body:`Use the commands below to get started.\n\n${commandLines}`}));
+   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
+   return i.update({embeds:[embed],components:i.message.components});
   }
   if(i.isChatInputCommand()) return await handleChatInputCommand(i);
  } catch(e) {
@@ -2398,7 +2211,7 @@ async function sendStaffEmbed(channel, {title, description, target, actor, succe
  });
  if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
  if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
- return channel.send(nexzuCommandPayload({embeds:[embed]}, 'command')).catch(() => null);
+ return channel.send({embeds:[embed]}).catch(() => null);
 }
 
 // Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
@@ -2492,11 +2305,7 @@ async function parsePrefixCommand(message, raw) {
  };
  for(let oi=0;oi<schema.options.length;oi++) {
   const opt=schema.options[oi];
-  let rawValue=takeFor(opt,cursor);
-  // Prefix form supports `.botprofile avatar` / `.botprofile banner` with an attached image.
-  if(rawValue===undefined && opt.type===11 && commandData.name==='botprofile' && message.attachments?.size) {
-   rawValue=message.attachments.first();
-  }
+  const rawValue=takeFor(opt,cursor);
   if(rawValue===undefined) {
    if(opt.required) return {error:`Missing required option **${opt.name}**.`,commandData};
    continue;
@@ -2504,7 +2313,6 @@ async function parsePrefixCommand(message, raw) {
   if(!Object.prototype.hasOwnProperty.call(named,opt.name)) cursor += (opt.type===3 && opt===schema.options[schema.options.length-1] ? positional.length-cursor : 1);
   let value=rawValue;
   if(opt.type===6||opt.type===8||opt.type===7) value=await resolvePrefixEntity(message,opt,rawValue);
-  else if(opt.type===11) value=rawValue;
   else if(opt.type===4) value=Number.parseInt(rawValue,10);
   else if(opt.type===10) value=Number(rawValue);
   else if(opt.type===5) value=/^(true|yes|on|1)$/i.test(String(rawValue));
@@ -2817,7 +2625,7 @@ Open a ticket to claim your reward after reaching the required invites!
 
 Good luck, everyone! ♡***`);
   try {
-   await message.channel.send(nexzuCommandPayload({embeds:[eventEmbed]}, 'giveaway'));
+   await message.channel.send({embeds:[eventEmbed]});
    const posterPath = path.join(__dirname, 'event-poster.png');
    await message.channel.send({files:[new AttachmentBuilder(posterPath, {name:'coffee-chill-invite-event.png'})]});
   } catch(error) {
@@ -3180,7 +2988,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
 ~ Powered by Spidyyy`,
    footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
   try {
-   await target.send(nexzuCommandPayload({embeds:[ad]}, 'ad'));
+   await target.send({embeds:[ad]});
    await message.reply(`✅ Advertisement DM sent to ${target.tag}.`).catch(()=>{});
   } catch {
    await message.reply(`❌ I couldn't DM ${target.tag}. Their DMs may be closed or they may have blocked the bot.`).catch(()=>{});
@@ -3357,7 +3165,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   const owner=await client.users.fetch(TRUSTED_OWNER_ID).catch(()=>null);
   if(!owner) return message.reply('I could not contact the bot owner. Please try again later.');
   const requestEmbed=chillyStyledEmbed({title:`${CHILLY_EMOJI.money} New Nexzu Withdrawal Request`,description:`**Status:** Pending\n**Member:** ${message.author.tag} (<@${message.author.id}>)\n**User ID:** \`${message.author.id}\`\n**Server:** ${message.guild.name}\n**Server ID:** \`${message.guild.id}\`\n**Amount:** **₹${(requested/100).toFixed(2)}**\n**Available before request:** ₹${(available/100).toFixed(2)}\n\nUse \`.withdraw-paid REQUEST_ID\` after manually sending the reward.`,footer:'Nexzu • Real Money Rewards • Manual Review'});
-  let sent; try { sent=await owner.send(nexzuCommandPayload({embeds:[requestEmbed]}, 'withdraw')); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
+  let sent; try { sent=await owner.send({embeds:[requestEmbed]}); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
   const info=db.prepare("INSERT INTO real_money_withdrawals(guild,user,amount_paise,status,created) VALUES(?,?,?,'pending',?)").run(message.guild.id,message.author.id,requested,Date.now());
   await sent.edit({embeds:[EmbedBuilder.from(requestEmbed).addFields({name:'Request ID',value:String(info.lastInsertRowid)})]}).catch(()=>{});
   return message.reply(`${CHILLY_EMOJI.success} Your withdrawal request **#${info.lastInsertRowid}** for **₹${(requested/100).toFixed(2)}** has been sent to the bot owner by DM. It is pending manual review; no payment is automatic.`);
