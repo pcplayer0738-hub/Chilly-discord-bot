@@ -173,6 +173,16 @@ const commands = [
   .addUserOption(o=>o.setName('user').setDescription('Member to release').setRequired(true)),
  new SlashCommandBuilder().setName('ping').setDescription('Check bot latency'),
  new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+ new SlashCommandBuilder().setName('botprofile').setDescription('Customize Nexzu per-server profile')
+  .addSubcommand(sub=>sub.setName('avatar').setDescription('Set Nexzu avatar for this server')
+   .addAttachmentOption(o=>o.setName('image').setDescription('Avatar image (PNG, JPG or GIF)').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('banner').setDescription('Set Nexzu banner for this server')
+   .addAttachmentOption(o=>o.setName('image').setDescription('Banner image (PNG, JPG or GIF)').setRequired(true)))
+  .addSubcommand(sub=>sub.setName('name').setDescription('Set Nexzu display name for this server')
+   .addStringOption(o=>o.setName('name').setDescription('Server-specific bot name').setMaxLength(32).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('bio').setDescription('Set Nexzu About Me for this server')
+   .addStringOption(o=>o.setName('bio').setDescription('Server-specific About Me').setMaxLength(190).setRequired(true)))
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset Nexzu server-specific profile')),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
@@ -973,6 +983,32 @@ async function stealFromSourceMessage(guild, sourceMessage) {
  return {ok:false,message:'❌ I could not find a custom emoji or sticker in that message. Unicode emojis cannot be added as server emojis.'};
 }
 
+async function updateNexzuServerProfile(guild, changes) {
+  if (!guild) throw new Error('This command can only be used inside a server.');
+  // Discord's per-guild bot profile uses Modify Current Member. Unlike
+  // client.user.edit(), this changes Nexzu only inside the current guild.
+  const body = {};
+  for (const [key, value] of Object.entries(changes || {})) {
+    if (value !== undefined) body[key] = value;
+  }
+  return client.rest.patch(`/guilds/${guild.id}/members/@me`, { body });
+}
+
+async function attachmentToDataURI(attachment) {
+  if (!attachment?.url) throw new Error('No image attachment was provided.');
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const name = String(attachment.name || '').toLowerCase();
+  const allowed = contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(name);
+  if (!allowed) throw new Error('Please upload a PNG, JPG, GIF, or WEBP image.');
+  if (attachment.size && attachment.size > 10 * 1024 * 1024) throw new Error('The image must be 10 MB or smaller.');
+  const res = await fetch(attachment.url);
+  if (!res.ok) throw new Error(`Discord could not download the image (HTTP ${res.status}).`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length > 10 * 1024 * 1024) throw new Error('The image must be 10 MB or smaller.');
+  const mime = contentType.startsWith('image/') ? contentType : (name.endsWith('.gif') ? 'image/gif' : name.endsWith('.webp') ? 'image/webp' : name.endsWith('.png') ? 'image/png' : 'image/jpeg');
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
+
 async function handleChatInputCommand(i){
   const c=i.commandName, u=i.user, g=i.guild;
   // All normal text replies become branded embeds. Image/card replies remain untouched.
@@ -983,6 +1019,41 @@ async function handleChatInputCommand(i){
   const isTrustedOwner = u.id === TRUSTED_OWNER_ID;
   const isGuildOwner = g && u.id === g.ownerId;
   const target=i.options.getUser('user', false);
+  if(c==='botprofile') {
+   if(!g) return i.reply({content:'❌ This command can only be used inside a server.',flags:MessageFlags.Ephemeral});
+   if(!isTrustedOwner && !isGuildOwner && !i.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return i.reply({content:'❌ You need **Manage Server** permission to customize Nexzu.',flags:MessageFlags.Ephemeral});
+   }
+   const sub=i.options.getSubcommand();
+   try {
+    if(sub==='avatar' || sub==='banner') {
+     const attachment=i.options.getAttachment('image',true);
+     const data=await attachmentToDataURI(attachment);
+     await updateNexzuServerProfile(g,{[sub]:data});
+     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's **${sub}** has been updated for **${g.name}** only.
+
+${CHILLY_EMOJI.dot} Other servers will keep their own Nexzu profile.`,flags:MessageFlags.Ephemeral});
+    }
+    if(sub==='name') {
+     const name=i.options.getString('name',true).trim();
+     await updateNexzuServerProfile(g,{nick:name});
+     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server name is now **${name}**.`,flags:MessageFlags.Ephemeral});
+    }
+    if(sub==='bio') {
+     const bio=i.options.getString('bio',true).trim();
+     await updateNexzuServerProfile(g,{bio});
+     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server bio has been updated.`,flags:MessageFlags.Ephemeral});
+    }
+    if(sub==='reset') {
+     await updateNexzuServerProfile(g,{avatar:null,banner:null,bio:null,nick:null});
+     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server-specific profile has been reset.`,flags:MessageFlags.Ephemeral});
+    }
+   } catch(error) {
+    console.error('botprofile error:',error?.rawError || error);
+    const detail=error?.status===403?'Discord rejected the profile update. Make sure Nexzu is installed correctly in this server.':error?.status===400?'Discord rejected the image/profile data. Try a PNG/JPG/GIF image under 10 MB.':'The profile update failed. Please try again.';
+    return i.reply({content:`${CHILLY_EMOJI.rejected} ${detail}`,flags:MessageFlags.Ephemeral});
+   }
+  }
   if(c==='levelup-setup') {
    if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !isTrustedOwner && !isGuildOwner) return i.reply({content:'⛔ You need Manage Server permission.',flags:MessageFlags.Ephemeral});
    const channel=i.options.getChannel('channel');
@@ -2285,7 +2356,11 @@ async function parsePrefixCommand(message, raw) {
  };
  for(let oi=0;oi<schema.options.length;oi++) {
   const opt=schema.options[oi];
-  const rawValue=takeFor(opt,cursor);
+  let rawValue=takeFor(opt,cursor);
+  // Prefix form supports `.botprofile avatar` / `.botprofile banner` with an attached image.
+  if(rawValue===undefined && opt.type===11 && commandData.name==='botprofile' && message.attachments?.size) {
+   rawValue=message.attachments.first();
+  }
   if(rawValue===undefined) {
    if(opt.required) return {error:`Missing required option **${opt.name}**.`,commandData};
    continue;
@@ -2293,6 +2368,7 @@ async function parsePrefixCommand(message, raw) {
   if(!Object.prototype.hasOwnProperty.call(named,opt.name)) cursor += (opt.type===3 && opt===schema.options[schema.options.length-1] ? positional.length-cursor : 1);
   let value=rawValue;
   if(opt.type===6||opt.type===8||opt.type===7) value=await resolvePrefixEntity(message,opt,rawValue);
+  else if(opt.type===11) value=rawValue;
   else if(opt.type===4) value=Number.parseInt(rawValue,10);
   else if(opt.type===10) value=Number(rawValue);
   else if(opt.type===5) value=/^(true|yes|on|1)$/i.test(String(rawValue));
@@ -2680,82 +2756,6 @@ Good luck, everyone! ♡***`);
   const everyone=message.guild.roles.everyone;
   try { await message.channel.permissionOverwrites.edit(everyone, {ViewChannel:rawPrefix==='.unhide'?true:false}); return message.reply(rawPrefix==='.hide'?'🙈 Channel hidden from @everyone.':'👀 Channel visible to @everyone again.'); }
   catch { return message.reply('❌ I need **Manage Channels** and permission to edit this channel.').catch(()=>{}); }
- }
-
- // Secret .pookie: owner-only screenshot-style Pookie server builder.
- if (message.content.trim().toLowerCase() === '.pookie') {
-  if (message.author.id !== TRUSTED_OWNER_ID) return;
-  const guild = message.guild;
-  if (!guild) return;
-
-  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
-  if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels) ||
-      !botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) {
-   return message.reply('❌ Nexzu needs **Manage Channels** and **Manage Roles** permissions.').catch(() => {});
-  }
-
-  // Names/symbols below are transcribed from the supplied Pookie screenshots.
-  // Discord custom emoji IDs are not present in screenshots, so visible Unicode symbols are preserved.
-  const roleSpecs = [
-   ['ε・ ArchAngel 〜','#D9DDE1'], ['ε 3・Divine Overseer,','#D9DDE1'], ['ε 3・Guardian,','#D9DDE1'],
-   ['ε red 3・✧','#F3B6B6'], ['ε orange 3・✧','#F3D0B6'], ['ε yellow 3・✧','#E8DDAE'],
-   ['ε green 3・✧','#C5D9C0'], ['ε blue 3・✧','#BFD4E5'], ['ε purple 3・✧','#D3C1DD'],
-   ['ε pink 3・✧','#E6C1D2'], ['♡・VIP・♡','#D9DDE1'], ['♡・Sub・♡','#D9DDE1'],
-   ['/◇・artist ʚ','#D9DDE1'], ['/◇・writer ʚ','#D9DDE1'], ['/◇・gamer ʚ','#D9DDE1'], ['/◇・crafter ʚ','#D9DDE1'],
-   ['☆ owner ☆','#D9DDE1'], ['◎ admin☆','#D9DDE1'], ['✂・mod・☆','#D9DDE1'], ['☆ vip・✦','#D9DDE1'],
-   ['//・member 🫧','#D9DDE1'], ['╱╲・musician・🎹','#D9DDE1'], ['╱╲・gamer・🎧','#D9DDE1'],
-   ['╱╲・writer・🏠','#D9DDE1'], ['╱╲・artist・☁️','#D9DDE1'], ['-・☆・-18','#D9DDE1'], ['18+・☆','#D9DDE1'],
-   ['☆ bots ☆','#D9DDE1'], ['╱・:PC・','#D9DDE1'], ['╱・:Xbox','#D9DDE1'], ['╱・:Mobile','#D9DDE1'],
-   ['╱・:PlayStation','#D9DDE1'], ['╱・:Nintendo Switch','#D9DDE1']
-  ];
-
-  const categories = [
-   { name:'・୨ angels landing ・⌒', channels:[
-    ['୨, welc`',ChannelType.GuildText], ['〰・rules! ʚ',ChannelType.GuildText], ['・🪽・verify・⌒',ChannelType.GuildText]
-   ]},
-   { name:'♡・for you・⌒', channels:[
-    ['୨・intro🦢',ChannelType.GuildText], ['୨・roles・ʚ',ChannelType.GuildText], ['⌒annc・ʚ',ChannelType.GuildText]
-   ]},
-   { name:'୨・chat・⌒', channels:[
-    ['୨・general・🪽',ChannelType.GuildText], ['ω・media!・ʚ',ChannelType.GuildText], ['♥・advice・♡',ChannelType.GuildText], ['〰・gaming・♡',ChannelType.GuildText], ['♧, memes! `',ChannelType.GuildText]
-   ]},
-   { name:'・୨ angels voice・⌒', channels:[['mute_M',ChannelType.GuildText]], voices:[['〰・general・⌒'],['〰・chill・♥'],['〰・study・ʚ'],['〰・music・🦢'],['〰・gaming!・ʚ'],['〰・afk/idle・zZ ʅ']]},
-   { name:'୨・001⌄', channels:[
-    ['//・🏠 welc・#・',ChannelType.GuildText], ['・→・`rules・🛒',ChannelType.GuildText], ['✂・× intro・🎹',ChannelType.GuildText], ['🎧・✧・annc・≋',ChannelType.GuildText]
-   ]},
-   { name:'୨・002⌄', channels:[
-    ['🎹・general・#',ChannelType.GuildText], ['↻・gaming・▦',ChannelType.GuildText], ['🛒・memes・🏠',ChannelType.GuildText], ['☆・🐼・pets・≋',ChannelType.GuildText], ['##・advice・🌀',ChannelType.GuildText], ['//・☁️・cmnds・▧',ChannelType.GuildText]
-   ]}
-  ];
-
-  let rolesCreated=0, categoriesCreated=0, channelsCreated=0, skipped=0;
-  const roleMap=new Map();
-  try {
-   for (const [name,color] of roleSpecs) {
-    let role=guild.roles.cache.find(r=>r.name===name);
-    if (!role) { role=await guild.roles.create({name,color,reason:'Owner-only .pookie screenshot setup'}); rolesCreated++; }
-    roleMap.set(name,role);
-   }
-
-   for (const group of categories) {
-    let category=guild.channels.cache.find(c=>c.type===ChannelType.GuildCategory && c.name===group.name);
-    if (!category) { category=await guild.channels.create({name:group.name,type:ChannelType.GuildCategory,reason:'Owner-only .pookie screenshot setup'}); categoriesCreated++; }
-    for (const [name,type] of (group.channels||[])) {
-     const exists=guild.channels.cache.find(c=>c.parentId===category.id && c.type===type && c.name===name);
-     if (exists) { skipped++; continue; }
-     await guild.channels.create({name,type,parent:category.id,reason:'Owner-only .pookie screenshot setup'}); channelsCreated++;
-    }
-    for (const [name] of (group.voices||[])) {
-     const exists=guild.channels.cache.find(c=>c.parentId===category.id && c.type===ChannelType.GuildVoice && c.name===name);
-     if (exists) { skipped++; continue; }
-     await guild.channels.create({name,type:ChannelType.GuildVoice,parent:category.id,reason:'Owner-only .pookie screenshot setup'}); channelsCreated++;
-    }
-   }
-   return message.reply(`✅ **Pookie setup completed.**\\n• Roles created: **${rolesCreated}**\\n• Categories created: **${categoriesCreated}**\\n• Channels created: **${channelsCreated}**\\n• Already existed: **${skipped}**\\n\\n⚠️ Screenshot custom Discord emojis cannot be recovered from pixels alone; visible Unicode symbols are preserved.`).catch(()=>{});
-  } catch (error) {
-   console.error('.pookie error:',error);
-   return message.reply(`❌ **Pookie setup failed.**\\n\`${String(error.message||error).slice(0,250)}\``).catch(()=>{});
-  }
  }
 
  // Secret !setup: only the configured bot owner can build the Lovespot layout.
