@@ -817,7 +817,7 @@ function chillyHelpPayload() {
   {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1574646167776530483',name:'1000023601'},line:`${E.leveling} » **Leveling**`},
   {label:'Bot Custom',description:'Customize Nexzu for this server',value:'botcustom',emoji:{id:'1574646096859242547',name:'1000023580'},line:`${E.botcustom} » **Bot Custom**`}
  ];
- const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
+ const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>({label:option.label,description:option.description,value:option.value})));
  const invite = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
  const description = [
   "**Hey, I'm Nexzu™**",
@@ -1281,7 +1281,14 @@ Logs: <#${log.id}>`,flags:MessageFlags.Ephemeral});
     );
    return i.reply({embeds:[embed]});
   }
-  if(c==='help') return i.reply(chillyHelpPayload());
+  if(c==='help') {
+   try { return i.reply(chillyHelpPayload()); }
+   catch(error) {
+    console.error('Help payload failed:', error);
+    const fallback=chillyStyledEmbed({title:'✨ Hey, I\'m Nexzu™',description:'Use **/help** to explore commands.\n\nThe command menu is temporarily unavailable; please try again in a moment.',thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
+    return i.reply({embeds:[fallback]});
+   }
+  }
   if(c==='balance') {
    const who=target||u, a=account(g.id,who.id);
    const buffer=await renderEconomyCard({user:who,command:'balance',balance:a.coins,note:`Rank #${economyRank(who.id)} on the global Nexzu economy`});
