@@ -1,7 +1,8 @@
 const {
   Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ChannelType,
   PermissionFlagsBits, MessageFlags, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder
+  ButtonStyle, ActivityType, StringSelectMenuBuilder, Partials, AttachmentBuilder,
+  ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder
 } = require('discord.js');
 const Database = require('better-sqlite3');
 const path = require('node:path');
@@ -776,23 +777,81 @@ function chillyStyledEmbed({title, description='', color=0x363640, thumbnail=tru
 function nexzuCommandPayload(payload, commandName='command') {
  if (typeof payload === 'string') payload={content:payload};
  if (!payload || typeof payload !== 'object') return payload;
- if (payload.embeds?.length || payload.files?.length || payload.components?.length) return payload;
- if (!payload.content) return payload;
- const text=String(payload.content).trim();
- let icon=CHILLY_EMOJI.sparkle;
- let color=0x363640;
- if (/^(?:⛔|❌|⚠️|🚫)/.test(text)) { icon=CHILLY_EMOJI.rejected; color=0x4a2028; }
- else if (/^(?:✅|☑️)/.test(text)) { icon=CHILLY_EMOJI.success; color=0x1f4a36; }
- else if (/^(?:ℹ️|📌)/.test(text)) { icon=CHILLY_EMOJI.utility; }
+ // Components V2 payloads (such as /help) are already native boxes.
+ if (payload.flags && (Number(payload.flags) & Number(MessageFlags.IsComponentsV2 ?? 32768)) && payload.components?.length) return payload;
+ // Image/file-only responses are intentionally preserved so generated cards/files still render normally.
+ if (payload.files?.length && !payload.content && !payload.embeds?.length) return payload;
+
+ const v2Flag = MessageFlags.IsComponentsV2 ?? 32768;
+ const flags = Number(payload.flags || 0) | Number(v2Flag);
+ const embeds = Array.isArray(payload.embeds) ? payload.embeds : [];
+ const firstEmbed = embeds[0];
+
+ let text = '';
+ let title = '';
+ let thumbnailUrl = null;
+
+ if (payload.content) text = String(payload.content).trim();
+ if (firstEmbed) {
+  title = firstEmbed.title ? String(firstEmbed.title) : '';
+  const desc = firstEmbed.description ? String(firstEmbed.description) : '';
+  if (!text) text = desc;
+  else if (desc) text += `\\n\\n${desc}`;
+  if (Array.isArray(firstEmbed.fields) && firstEmbed.fields.length) {
+   const fields = firstEmbed.fields.map(f => `**${String(f.name || 'Field')}**\\n${String(f.value || '—')}`).join('\\n\\n');
+   text += `${text ? '\\n\\n' : ''}${fields}`;
+  }
+  thumbnailUrl = firstEmbed.thumbnail?.url || firstEmbed.image?.url || null;
+  if (firstEmbed.footer?.text) text += `${text ? '\\n\\n' : ''}${String(firstEmbed.footer.text)}`;
+ }
+
+ if (!text && !title) return payload;
+
+ const icon = text.match(/^(?:<a?:[^>]+>|[⛔❌⚠️🚫✅☑️ℹ️📌])/u)?.[0] || CHILLY_EMOJI.sparkle;
+ let accent = 0x6f2dbd;
+ if (/^(?:⛔|❌|⚠️|🚫)/u.test(text)) accent = 0x8f3340;
+ else if (/^(?:✅|☑️)/u.test(text)) accent = 0x2f8f62;
+ else if (/^(?:ℹ️|📌)/u.test(text)) accent = 0x3b6ea8;
+
+ const container = new ContainerBuilder().setAccentColor(accent);
+ const heading = title || `${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`;
+ const body = title && text ? `# ${title}\\n\\n${text}` : (title ? `# ${title}` : text);
+
+ if (thumbnailUrl && typeof SectionBuilder === 'function' && typeof ThumbnailBuilder === 'function') {
+  const section = new SectionBuilder()
+   .addTextDisplayComponents(new TextDisplayBuilder().setContent(body))
+   .setThumbnailAccessory(new ThumbnailBuilder().setURL(thumbnailUrl));
+  container.addSectionComponents(section);
+ } else {
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(body));
+ }
+
+ if (Array.isArray(payload.components) && payload.components.length) {
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  for (const component of payload.components) {
+   // Existing action rows remain usable inside the native container.
+   if (component?.data?.type === 1 || component?.type === 1) {
+    container.addActionRowComponents(component);
+   } else if (component?.data?.type === 14 || component?.type === 14) {
+    container.addSeparatorComponents(component);
+   } else if (component?.data?.type === 9 || component?.type === 9) {
+    container.addSectionComponents(component);
+   } else {
+    // Unknown/unsupported legacy components are left out rather than crashing the command.
+   }
+  }
+ }
+
  return {
   ...payload,
   content: undefined,
-  embeds:[chillyStyledEmbed({title:`${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`,description:text,color})]
+  embeds: undefined,
+  components: [container],
+  flags
  };
 }
-
-function chillyHelpPayload() {
- const categories = [
+function chillyHelpCategories() {
+ return [
   {label:'Economy',description:'Coins, rewards and payments',value:'economy',emoji:{id:'1571576540460752937',name:'1000022218'},line:'<:1000022218:1571576540460752937> » **Economy**'},
   {label:'Real Money Rewards',description:'INR rewards and cash-out requests',value:'rewards',emoji:{id:'1571576535972839504',name:'1000022223'},line:'<:1000022223:1571576535972839504> » **Real Money Rewards**'},
   {label:'Moderation',description:'Manage server members',value:'moderation',emoji:{id:'1571576542683861244',name:'1000022221'},line:'<:1000022221:1571576542683861244> » **Moderation**'},
@@ -805,26 +864,59 @@ function chillyHelpPayload() {
   {label:'Jail',description:'Jail and permitted jail staff',value:'jail',emoji:{id:'1571576531216629811',name:'1000022220'},line:'<:1000022220:1571576531216629811> » **Jail**'},
   {label:'Misc',description:'AFK, profiles, lists and utilities',value:'misc',emoji:{name:'🔧'},line:'🔧 » **Misc**'},
   {label:'Tickets',description:'Ticket panels and active tickets',value:'tickets',emoji:{id:'1571576497175789599',name:'1000022236'},line:'<:1000022236:1571576497175789599> » **Tickets**'},
-  {label:'Music',description:'Music and audio module',value:'music',emoji:{id:'1571576463449137183',name:'1000022225'},line:'<:1000022225:1571576463449137183> » **Music**'},
-  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'}
- ];;
- const menu = new StringSelectMenuBuilder().setCustomId('chilly_help_category').setPlaceholder('Home  ›  Choose a category').addOptions(categories.map(({line,...option})=>option));
- const invite = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
- const description = [
-  "**Hey, I'm Nexzu™**",
-  'A powerful multipurpose Discord bot for your community.',
+  {label:'Leveling',description:'XP, levels and rewards',value:'leveling',emoji:{id:'1571576486169809048',name:'1000022234'},line:'<:1000022234:1571576486169809048> » **Leveling**'},
+  {label:'Bot Profile',description:'Customize Nexzu for this server',value:'botprofile',emoji:{name:'🤖'},line:'🤖 » **Bot Profile**'}
+ ];
+}
+
+function chillyHelpSelectRow() {
+ const categories=chillyHelpCategories();
+ const menu=new StringSelectMenuBuilder()
+  .setCustomId('chilly_help_category')
+  .setPlaceholder('Home  ›  Choose a category')
+  .addOptions(categories.map(({line,...option})=>option));
+ return new ActionRowBuilder().addComponents(menu);
+}
+
+function chillyHelpV2Payload({title,body,showHome=true}={}) {
+ const categories=chillyHelpCategories();
+ const invite=`https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`;
+ const avatar=client.user?.displayAvatarURL?.({extension:'png',size:256}) || 'https://cdn.discordapp.com/embed/avatars/0.png';
+ const intro=body || [
+  `# <:1000022239:1571576504599712004> Hey, I'm Nexzu™`,
+  `> Your all-in-one Discord companion`,
   '',
-  `<:1000022237:1571576499876921487> **My Prefix is**  \`.\`  •  Every command also works with the dot prefix`,
-  `<:1000022243:1571576512547782718> **Total Commands:** \`${commands.length}\``,
-  '<:1000022241:1571576510081536081> **Choose a Specific Module of your Desire**',
+  `Nexzu is a full-featured Discord bot built to run and protect your server end to end — moderation, AntiNuke security, AutoMod, tickets, economy, giveaways, leveling, utilities and more.`,
+  '',
+  `> **Prefix for this server:** \.`,
+  `> **Slash commands:** Use \/help and the command dropdowns below`,
+  `> **Total Commands:** \`${commands.length}\``,
+  `> **Need help?** Use \/support or ask me with an @mention`,
   '',
   categories.map(x=>x.line).join('\n'),
   '',
-  '<:1000022241:1571576510081536081> **Links**',
-  `[Invite Me](${invite})  |  [Support Server](https://discord.gg/TFVrsdNWGx)  |  [Website](https://spidyyy09.github.io/portfolio/)`
+  `**Links:** [Invite Me](${invite}) • [Support Server](https://discord.gg/TFVrsdNWGx)`
  ].join('\n');
- const embed = chillyStyledEmbed({title:'<:1000022239:1571576504599712004> Hey, I\'m Nexzu™',description,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
- return {embeds:[embed],components:[new ActionRowBuilder().addComponents(menu)]};
+
+ // Components V2: this is a native Discord Container, not an Embed.
+ if (typeof ContainerBuilder==='function' && typeof TextDisplayBuilder==='function' && typeof SectionBuilder==='function' && typeof ThumbnailBuilder==='function') {
+  const container=new ContainerBuilder().setAccentColor(0x6f2dbd);
+  const section=new SectionBuilder()
+   .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro))
+   .setThumbnailAccessory(new ThumbnailBuilder().setURL(avatar));
+  container.addSectionComponents(section);
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  container.addActionRowComponents(chillyHelpSelectRow());
+  if (title && body) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${title}\n\n${body}`));
+  return {flags: MessageFlags.IsComponentsV2 ?? 32768, components:[container]};
+ }
+
+ // Fallback for an older discord.js build.
+ return {embeds:[chillyStyledEmbed({title:title||'<:1000022239:1571576504599712004> Hey, I\'m Nexzu™',description:intro,thumbnail:true,timestamp:false,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'})],components:[chillyHelpSelectRow()]};
+}
+
+function chillyHelpPayload() {
+ return chillyHelpV2Payload();
 }
 
 function moderationEmbed({title, targetLabel='Member', targetName, targetId, moderator, reason, duration, dmDone, avatar}) {
@@ -2100,9 +2192,6 @@ client.on('interactionCreate', async i=>{
      '`.list inrole <role>` — List members who have a role.',
      '`.fakeperms <role> <permission>` — Preview/manage fake permissions from a role.'
     ].join('\n')},
-    music:{title:'<:1000022225:1571576463449137183> Music',body:[
-     `${CHILLY_EMOJI.music} Music category is ready. Add your music commands here.`
-    ].join('\n')},
     tickets:{title:'🎟️ tickets',body:[
      '`.ticket` — Manage ticket panels and active tickets.',
      '`.ticket claim` — Claim the current ticket.',
@@ -2120,14 +2209,25 @@ client.on('interactionCreate', async i=>{
      '`/level-leaderboard` — View the server XP leaderboard.',
      '`/levelup-setup` — Configure level-up notifications.',
      '`/levelrole` — Manage level-based role rewards.'
+    ].join('\n')},
+    botprofile:{title:'🤖 Bot Profile Commands',body:[
+     '`/botprofile avatar` — Set Nexzu’s server-specific avatar.',
+     '`/botprofile banner` — Set Nexzu’s server-specific banner.',
+     '`/botprofile name` — Set Nexzu’s server-specific display name.',
+     '`/botprofile bio` — Set Nexzu’s server-specific About Me.',
+     '`/botprofile reset` — Reset Nexzu’s server-specific profile.',
+     '`.botprofile avatar` — Set the server-specific avatar using an attached image.',
+     '`.botprofile banner` — Set the server-specific banner using an attached image.',
+     '`.botprofile name <name>` — Set the server-specific display name.',
+     '`.botprofile bio <text>` — Set the server-specific About Me.',
+     '`.botprofile reset` — Reset the server-specific profile.'
     ].join('\n')}
    };
    const page=pages[i.values[0]];
-   if(!page || !page.body.trim()) return i.update({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.utility} Nexzu Command Center`,description:'No commands are currently available in this category.'})],components:i.message.components});
-   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,antinuke:CHILLY_EMOJI.security,automod:CHILLY_EMOJI.fun,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,music:CHILLY_EMOJI.music,leveling:CHILLY_EMOJI.level}[i.values[0]]||CHILLY_EMOJI.dot;
+   if(!page || !page.body.trim()) return i.update(chillyHelpV2Payload({title:`${CHILLY_EMOJI.utility} Nexzu Command Center`,body:'No commands are currently available in this category.'}));
+   const categoryEmoji={economy:CHILLY_EMOJI.money,rewards:CHILLY_EMOJI.money,moderation:CHILLY_EMOJI.moderator,antinuke:CHILLY_EMOJI.security,automod:CHILLY_EMOJI.fun,giveaways:CHILLY_EMOJI.gift,fun:CHILLY_EMOJI.fun,utility:CHILLY_EMOJI.utility,setup:CHILLY_EMOJI.settings,leveling:CHILLY_EMOJI.level,botprofile:'🤖'}[i.values[0]]||CHILLY_EMOJI.dot;
    const commandLines=page.body.split('\n').map(line=>`${categoryEmoji} ${line}`).join('\n');
-   const embed=chillyStyledEmbed({title:page.title,description:'Use the commands below to get started.\n\n'+commandLines,footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
-   return i.update({embeds:[embed],components:i.message.components});
+   return i.update(chillyHelpV2Payload({title:page.title,body:`Use the commands below to get started.\n\n${commandLines}`}));
   }
   if(i.isChatInputCommand()) return await handleChatInputCommand(i);
  } catch(e) {
