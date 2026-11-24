@@ -179,11 +179,7 @@ const commands = [
    .addAttachmentOption(o=>o.setName('image').setDescription('Avatar image (PNG, JPG or GIF)').setRequired(true)))
   .addSubcommand(sub=>sub.setName('banner').setDescription('Set Nexzu banner for this server')
    .addAttachmentOption(o=>o.setName('image').setDescription('Banner image (PNG, JPG or GIF)').setRequired(true)))
-  .addSubcommand(sub=>sub.setName('name').setDescription('Set Nexzu display name for this server')
-   .addStringOption(o=>o.setName('name').setDescription('Server-specific bot name').setMaxLength(32).setRequired(true)))
-  .addSubcommand(sub=>sub.setName('bio').setDescription('Set Nexzu About Me for this server')
-   .addStringOption(o=>o.setName('bio').setDescription('Server-specific About Me').setMaxLength(190).setRequired(true)))
-  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset Nexzu server-specific profile')),
+  .addSubcommand(sub=>sub.setName('reset').setDescription('Reset Nexzu server-specific avatar and banner')),
  new SlashCommandBuilder().setName('say').setDescription('Send a message in this channel or an optional selected channel')
   .addStringOption(o=>o.setName('message').setDescription('Message to send').setMaxLength(2000).setRequired(true))
   .addChannelOption(o=>o.setName('channel').setDescription('Optional destination channel').addChannelTypes(ChannelType.GuildText).setRequired(false))
@@ -705,7 +701,7 @@ async function logAction(guild, embed) {
   const cfg=settings(guild.id);
   if(!cfg.log_channel) return;
   const channel=await guild.channels.fetch(cfg.log_channel).catch(()=>null);
-  if(channel && channel.isTextBased()) await channel.send({embeds:[embed]}).catch(()=>{});
+  if(channel && channel.isTextBased()) await channel.send(nexzuCommandPayload({embeds:[embed]}, 'command')).catch(()=>{});
  } catch(e) { console.error('Log delivery error:',e); }
 }
 function auditEmbed(title, color, fields) {
@@ -796,13 +792,13 @@ function nexzuCommandPayload(payload, commandName='command') {
   title = firstEmbed.title ? String(firstEmbed.title) : '';
   const desc = firstEmbed.description ? String(firstEmbed.description) : '';
   if (!text) text = desc;
-  else if (desc) text += `\\n\\n${desc}`;
+  else if (desc) text += `\n\n${desc}`;
   if (Array.isArray(firstEmbed.fields) && firstEmbed.fields.length) {
-   const fields = firstEmbed.fields.map(f => `**${String(f.name || 'Field')}**\\n${String(f.value || '—')}`).join('\\n\\n');
-   text += `${text ? '\\n\\n' : ''}${fields}`;
+   const fields = firstEmbed.fields.map(f => `**${String(f.name || 'Field')}**\n${String(f.value || '—')}`).join('\n\n');
+   text += `${text ? '\n\n' : ''}${fields}`;
   }
   thumbnailUrl = firstEmbed.thumbnail?.url || firstEmbed.image?.url || null;
-  if (firstEmbed.footer?.text) text += `${text ? '\\n\\n' : ''}${String(firstEmbed.footer.text)}`;
+  if (firstEmbed.footer?.text) text += `${text ? '\n\n' : ''}${String(firstEmbed.footer.text)}`;
  }
 
  if (!text && !title) return payload;
@@ -815,7 +811,7 @@ function nexzuCommandPayload(payload, commandName='command') {
 
  const container = new ContainerBuilder().setAccentColor(accent);
  const heading = title || `${icon} ${String(commandName).replace(/[-_]/g,' ').replace(/\b\w/g,m=>m.toUpperCase())}`;
- const body = title && text ? `# ${title}\\n\\n${text}` : (title ? `# ${title}` : text);
+ const body = title && text ? `# ${title}\n\n${text}` : (title ? `# ${title}` : text);
 
  if (thumbnailUrl && typeof SectionBuilder === 'function' && typeof ThumbnailBuilder === 'function') {
   const section = new SectionBuilder()
@@ -1126,19 +1122,9 @@ async function handleChatInputCommand(i){
 
 ${CHILLY_EMOJI.dot} Other servers will keep their own Nexzu profile.`,flags:MessageFlags.Ephemeral});
     }
-    if(sub==='name') {
-     const name=i.options.getString('name',true).trim();
-     await updateNexzuServerProfile(g,{nick:name});
-     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server name is now **${name}**.`,flags:MessageFlags.Ephemeral});
-    }
-    if(sub==='bio') {
-     const bio=i.options.getString('bio',true).trim();
-     await updateNexzuServerProfile(g,{bio});
-     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server bio has been updated.`,flags:MessageFlags.Ephemeral});
-    }
     if(sub==='reset') {
-     await updateNexzuServerProfile(g,{avatar:null,banner:null,bio:null,nick:null});
-     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server-specific profile has been reset.`,flags:MessageFlags.Ephemeral});
+     await updateNexzuServerProfile(g,{avatar:null,banner:null});
+     return i.reply({content:`${CHILLY_EMOJI.success} Nexzu's server-specific **avatar and banner** have been reset.`,flags:MessageFlags.Ephemeral});
     }
    } catch(error) {
     console.error('botprofile error:',error?.rawError || error);
@@ -1327,7 +1313,7 @@ Logs: <#${log.id}>`,flags:MessageFlags.Ephemeral});
     const rows=[];
     for(let n=0;n<buttons.length;n+=5) rows.push(new ActionRowBuilder().addComponents(buttons.slice(n,n+5).map(b=>{const btn=new ButtonBuilder().setCustomId(`chilly_ticket_open:${b.ticket_key}`).setLabel(b.label).setStyle(ButtonStyle.Primary); if(b.emoji) btn.setEmoji(b.emoji); return btn;})));
     const channel=i.options.getChannel('channel');
-    await channel.send({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${i.options.getString('title')}`,description:`${CHILLY_EMOJI.dot} ${i.options.getString('description')}`,footer:'Nexzu • Tickets'})],components:rows});
+    await channel.send(nexzuCommandPayload({embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${i.options.getString('title')}`,description:`${CHILLY_EMOJI.dot} ${i.options.getString('description')}`,footer:'Nexzu • Tickets'})],components:rows}, 'ticket'));
     return i.reply({content:`✅ Ticket panel posted in ${channel} with ${buttons.length} custom button(s).`,flags:MessageFlags.Ephemeral});
    }
   }
@@ -1678,7 +1664,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const to=i.options.getUser('user'), reason=i.options.getString('reason')||'No reason provided';
    if(to.id===TRUSTED_OWNER_ID) return i.reply({content:'🛡️ This user is protected. Nexzu cannot warn this account.',flags:MessageFlags.Ephemeral});
    let dmDone=false;
-   try { await to.send({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
+   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been warned!',targetName:`${to.tag}`,targetId:to.id,moderator:`${u.tag}`,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
    db.prepare('INSERT INTO warnings(guild,user,moderator,reason,created) VALUES(?,?,?,?,?)').run(g.id,to.id,u.id,reason,Date.now());
    const embed=moderationEmbed({title:'User has been warned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1701,7 +1687,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    if(c==='timeout') {
     const mins=i.options.getInteger('minutes'), reason=i.options.getString('reason')||'No reason provided';
     let dmDone=false;
-    try { await to.send({embeds:[moderationEmbed({title:'You have been timed out!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
+    try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been timed out!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,duration:`${mins} minute(s)`,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
     await m.timeout(mins*60000,reason);
     const embed=moderationEmbed({title:'User has been timed out!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,duration:`${mins} minute(s)`,dmDone,avatar:to.displayAvatarURL()});
     await logAction(g,embed);
@@ -1709,7 +1695,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    }
    const reason='Timeout removed';
    let dmDone=false;
-   try { await to.send({embeds:[moderationEmbed({title:'Your timeout has been removed!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
+   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'Your timeout has been removed!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
    await m.timeout(null,reason);
    const embed=moderationEmbed({title:'User has been unmuted!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1721,7 +1707,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const m=await g.members.fetch(to.id);
    if(to.id===u.id) return i.reply({content:'You cannot moderate yourself.',flags:MessageFlags.Ephemeral});
    let dmDone=false;
-   try { await to.send({embeds:[moderationEmbed({title:c==='kick'?'You have been kicked!':'You have been banned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {}
+   try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:c==='kick'?'You have been kicked!':'You have been banned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {}
    if(c==='kick') await m.kick(reason); else await m.ban({reason});
    const embed=moderationEmbed({title:c==='kick'?'User has been kicked!':'User has been banned!',targetName:`<@${to.id}>`,targetId:to.id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to.displayAvatarURL()});
    await logAction(g,embed);
@@ -1733,7 +1719,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    try { to=await client.users.fetch(id); } catch {}
    await g.members.unban(id,reason);
    let dmDone=false;
-   if(to) { try { await to.send({embeds:[moderationEmbed({title:'You have been unbanned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}); dmDone=true; } catch {} }
+   if(to) { try { await to.send(nexzuCommandPayload({embeds:[moderationEmbed({title:'You have been unbanned!',targetName:to.tag,targetId:to.id,moderator:u.tag,reason,avatar:to.displayAvatarURL()})]}, 'moderation')); dmDone=true; } catch {} }
    const embed=moderationEmbed({title:'User has been unbanned!',targetLabel:'User',targetName:to ? to.tag : `\`${id}\``,targetId:id,moderator:`<@${u.id}>`,reason,dmDone,avatar:to?.displayAvatarURL()});
    await logAction(g,embed);
    return i.reply({embeds:[embed]});
@@ -1882,7 +1868,7 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
    const labels={gender:'Gender',age:'Age',relation:'Relation'}, label=labels[type] || 'Roles';
    const embed=chillyStyledEmbed({title:'__React to get your roles__',description:`🎀 **${label}**\n\n${e1.display}  ${role1} · <3\n${e2.display}  ${role2} · <3`,footer:'Nexzu • Self Roles • React to receive your role'});
    try {
-    const sent=await target.send({embeds:[embed]});
+    const sent=await target.send(nexzuCommandPayload({embeds:[embed]}, 'selfrole'));
     await sent.react(e1.reactValue); await sent.react(e2.reactValue);
     const save=db.prepare('INSERT INTO reaction_roles(guild,channel,message,emoji_key,emoji_input,role) VALUES(?,?,?,?,?,?) ON CONFLICT(guild,message,emoji_key) DO UPDATE SET channel=excluded.channel,emoji_input=excluded.emoji_input,role=excluded.role');
     save.run(g.id,sent.channelId,sent.id,e1.key,emojiInput1,role1.id); save.run(g.id,sent.channelId,sent.id,e2.key,emojiInput2,role2.id);
@@ -1955,6 +1941,10 @@ The role icon was updated using a custom emoji from this server.`,color:0x1f4a36
 
 client.on('interactionCreate', async i=>{
  try {
+  const _ir=i.reply?.bind(i), _ifu=i.followUp?.bind(i), _ier=i.editReply?.bind(i);
+  if (_ir) i.reply=(payload)=>_ir(nexzuCommandPayload(payload, i.commandName || 'interaction'));
+  if (_ifu) i.followUp=(payload)=>_ifu(nexzuCommandPayload(payload, i.commandName || 'interaction'));
+  if (_ier) i.editReply=(payload)=>_ier(nexzuCommandPayload(payload, i.commandName || 'interaction'));
   if(i.isButton()&&(i.customId==='chilly_ticket_open'||i.customId.startsWith('chilly_ticket_open:'))) {
    const ticketKey=i.customId==='chilly_ticket_open'?'default':i.customId.slice('chilly_ticket_open:'.length);
    const config=db.prepare('SELECT * FROM ticket_buttons WHERE guild=? AND ticket_key=?').get(i.guild.id,ticketKey);
@@ -1964,7 +1954,7 @@ client.on('interactionCreate', async i=>{
    const perms=[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:i.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:config.staff_role,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.ReadMessageHistory],deny:[PermissionFlagsBits.SendMessages]}];
    const ch=await i.guild.channels.create({name:`${ticketKey}-${i.user.username}`.toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,90),type:ChannelType.GuildText,topic:`chilly-ticket:${i.user.id}:${ticketKey}:${config.staff_role}:`,permissionOverwrites:perms});
    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('chilly_ticket_claim').setLabel('Claim Ticket').setEmoji('🙋').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('chilly_ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger));
-   await ch.send({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Nexzu • Tickets'})],components:[row]});
+   await ch.send(nexzuCommandPayload({content:`🎫 ${i.user} <@&${config.staff_role}>`,embeds:[chillyStyledEmbed({title:`${CHILLY_EMOJI.ticket} ${config.label} Ticket`,description:`${CHILLY_EMOJI.dot} Please describe your issue. A staff member must claim this ticket before messaging.\n\n${CHILLY_EMOJI.moderator} Only the claiming staff member can chat and close it.`,footer:'Nexzu • Tickets'})],components:[row]}, 'ticket'));
    return i.reply({content:`Ticket created: ${ch}`,flags:MessageFlags.Ephemeral});
   }
   if(i.isButton()&&i.customId==='chilly_ticket_claim') {
@@ -2213,14 +2203,10 @@ client.on('interactionCreate', async i=>{
     botprofile:{title:'🤖 Bot Profile Commands',body:[
      '`/botprofile avatar` — Set Nexzu’s server-specific avatar.',
      '`/botprofile banner` — Set Nexzu’s server-specific banner.',
-     '`/botprofile name` — Set Nexzu’s server-specific display name.',
-     '`/botprofile bio` — Set Nexzu’s server-specific About Me.',
-     '`/botprofile reset` — Reset Nexzu’s server-specific profile.',
+     '`/botprofile reset` — Reset Nexzu’s server-specific avatar and banner.',
      '`.botprofile avatar` — Set the server-specific avatar using an attached image.',
      '`.botprofile banner` — Set the server-specific banner using an attached image.',
-     '`.botprofile name <name>` — Set the server-specific display name.',
-     '`.botprofile bio <text>` — Set the server-specific About Me.',
-     '`.botprofile reset` — Reset the server-specific profile.'
+     '`.botprofile reset` — Reset the server-specific avatar and banner.'
     ].join('\n')}
    };
    const page=pages[i.values[0]];
@@ -2362,7 +2348,7 @@ async function sendStaffEmbed(channel, {title, description, target, actor, succe
  });
  if (target) embed.addFields({name:`${CHILLY_EMOJI.member} Member`,value:`${target} \`${target.id}\``,inline:true});
  if (actor) embed.addFields({name:`${CHILLY_EMOJI.moderator} Authorised By`,value:`${actor}`,inline:true});
- return channel.send({embeds:[embed]}).catch(() => null);
+ return channel.send(nexzuCommandPayload({embeds:[embed]}, 'command')).catch(() => null);
 }
 
 // Generic dot-prefix support: every slash command can also be invoked with `.<command>`.
@@ -2781,7 +2767,7 @@ Open a ticket to claim your reward after reaching the required invites!
 
 Good luck, everyone! ♡***`);
   try {
-   await message.channel.send({embeds:[eventEmbed]});
+   await message.channel.send(nexzuCommandPayload({embeds:[eventEmbed]}, 'giveaway'));
    const posterPath = path.join(__dirname, 'event-poster.png');
    await message.channel.send({files:[new AttachmentBuilder(posterPath, {name:'coffee-chill-invite-event.png'})]});
   } catch(error) {
@@ -3144,7 +3130,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
 ~ Powered by Spidyyy`,
    footer:'Powered By Nexzu Development™ | Designed By Spidyyy'});
   try {
-   await target.send({embeds:[ad]});
+   await target.send(nexzuCommandPayload({embeds:[ad]}, 'ad'));
    await message.reply(`✅ Advertisement DM sent to ${target.tag}.`).catch(()=>{});
   } catch {
    await message.reply(`❌ I couldn't DM ${target.tag}. Their DMs may be closed or they may have blocked the bot.`).catch(()=>{});
@@ -3321,7 +3307,7 @@ To get started, invite Nexzu to your server and use **/help** to explore the ava
   const owner=await client.users.fetch(TRUSTED_OWNER_ID).catch(()=>null);
   if(!owner) return message.reply('I could not contact the bot owner. Please try again later.');
   const requestEmbed=chillyStyledEmbed({title:`${CHILLY_EMOJI.money} New Nexzu Withdrawal Request`,description:`**Status:** Pending\n**Member:** ${message.author.tag} (<@${message.author.id}>)\n**User ID:** \`${message.author.id}\`\n**Server:** ${message.guild.name}\n**Server ID:** \`${message.guild.id}\`\n**Amount:** **₹${(requested/100).toFixed(2)}**\n**Available before request:** ₹${(available/100).toFixed(2)}\n\nUse \`.withdraw-paid REQUEST_ID\` after manually sending the reward.`,footer:'Nexzu • Real Money Rewards • Manual Review'});
-  let sent; try { sent=await owner.send({embeds:[requestEmbed]}); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
+  let sent; try { sent=await owner.send(nexzuCommandPayload({embeds:[requestEmbed]}, 'withdraw')); } catch { return message.reply('I could not DM the bot owner. Please make sure the owner allows DMs, then try again.'); }
   const info=db.prepare("INSERT INTO real_money_withdrawals(guild,user,amount_paise,status,created) VALUES(?,?,?,'pending',?)").run(message.guild.id,message.author.id,requested,Date.now());
   await sent.edit({embeds:[EmbedBuilder.from(requestEmbed).addFields({name:'Request ID',value:String(info.lastInsertRowid)})]}).catch(()=>{});
   return message.reply(`${CHILLY_EMOJI.success} Your withdrawal request **#${info.lastInsertRowid}** for **₹${(requested/100).toFixed(2)}** has been sent to the bot owner by DM. It is pending manual review; no payment is automatic.`);
